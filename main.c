@@ -546,8 +546,25 @@ void* consumer(void* d)
                                 if((sm->curr_map & BIT64(runi)))
                                 {
                                     fl_head_t info;
-                                    get_pb_info(&pb->rq_head, &info);
-                                    printf("got a second runi %u. head = %u, tail = %u, cnt = %u, hS = %u, tS = %u\n", runi, info.head, info.tail, info.count, info.headStep, info.tailStep);
+                                    if(sm->expected_full_map & BIT64(runi))
+                                    {
+                                        get_pb_info(&pb->rq_head, &info);
+                                        printf("got a second runi %u. head = %u, tail = %u, cnt = %u, hS = %u, tS = %u\n", runi, info.head, info.tail, info.count, info.headStep, info.tailStep);
+                                    }
+                                    else
+                                    {
+                                        sm->expected_full_map = 0;
+                                        sm->state = out_of_sync_e;
+                                        start_bm = 0;
+                                        sm->curr_map = 0llu;
+                                        for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+                                        {
+                                            outs[i].dlen = 0;
+                                            outs[i].fillMap = 0;
+                                        }
+                                        synced = 0;
+                                        continue;
+                                    }
                                 }
                                 else
                                 {
@@ -801,15 +818,17 @@ void* one_sec(void* d)
     }
 }
 
-#define MMLEN   20
-struct mmsghdr msgs[MMLEN];
-struct iovec iovecs[MMLEN];
+#define MMLEN_MMAX   40
+
 
 #define MILIS   (1000000ul)
 void* producer(void* d)
 {
     uint32_t idx, i, k;
-    uint_fast32_t hits[2+MMLEN];
+    peer_pack_t *packs[MMLEN_MMAX];
+    struct mmsghdr msgs[MMLEN_MMAX];
+    struct iovec iovecs[MMLEN_MMAX];
+    uint_fast32_t hits[2+MMLEN_MMAX];
     peer_pack_t *p;
     app_node_t* artn = (app_node_t*)d;
     node_t*     n = artn->artnode;
@@ -833,6 +852,8 @@ void* producer(void* d)
     trace_msg_t trm;
     trm.ev = prod_rx_msgs;
     trm.seq = 0;
+    int batch=1;
+    sm_state_e sm_state_cache;
  #define handle_error_en(en, msg) \
                do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
 
@@ -867,7 +888,7 @@ void* producer(void* d)
     char       tsbuf[80];
     int totmsges=0;
     memset(msgs, 0, sizeof(msgs));
-    for(i=0;i<MMLEN;i++)
+    for(i=0;i<MMLEN_MMAX;i++)
     {
         iovecs[i].iov_base = NULL;// addr of data
         iovecs[i].iov_len = sizeof(any_prot_pack_t);
@@ -877,10 +898,12 @@ void* producer(void* d)
 
     //p = rezerveMsg(&pb->rq_head);
     int32_t msgcnt;
+    #define MMLEN batch
     setSockTimout(n->sockfd, 1000);
     //cn =msgRezerveNB(pb);
+
     memset(hits,0,sizeof(hits));
-    peer_pack_t *packs[MMLEN];
+
     memset(packs,0,sizeof(packs));
     k = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
     for(i=0;i<k;i++)
@@ -898,7 +921,8 @@ void* producer(void* d)
         //sock_ret = recvfrom(mysock,(void*)&p->pl, sizeof(any_prot_pack_t),0, (struct sockaddr*)&p->sender, &addr_len);
         timeout.tv_sec = 0;
         timeout.tv_nsec = 40ul * MILIS;
-
+        sm_state_cache = n->sm.state;
+        if(sm_state_cache!=working_e)batch=1;
         msgcnt = recvmmsg(n->sockfd, msgs, k, MSG_WAITALL/* MSG_WAITFORONE */, &timeout);
         time(&trm.ts2);
 
@@ -974,10 +998,36 @@ void* producer(void* d)
             //cn =msgRezerveNB(pb);
             //p = rezerveMsg(pb);
             //if((++pCnt%100)==0)printf("Have %u packets\n", pCnt);
+            if((n->sm.state == working_e) && (sm_state_cache != working_e))
+            {
+                if(n->sm.active_unis & 1)
+                {
+                    if(n->sm.active_unis>(UNI_PER_OUT * GLOBAL_OUTPUTS_MAX))
+                    {
+                        batch = UNI_PER_OUT;
+                    }
+                    else
+                    {
+                        batch  = n->sm.active_unis;
+                    }
+                }
+                else
+                {
+                    if(n->sm.active_unis>(UNI_PER_OUT * GLOBAL_OUTPUTS_MAX))
+                    {
+                        batch = UNI_PER_OUT;
+                    }
+                    else
+                    {
+                        batch  = n->sm.active_unis/2;
+                    }
+                }
+                printf("Batch set to %d\n", batch);
+            }
         }
         else
         {
-
+            batch = 1;
             if(msgcnt>-1)
             {
                 printf("msgs = 0\n");
