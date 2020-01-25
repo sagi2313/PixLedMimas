@@ -29,8 +29,11 @@
 
 static int fd = -1;
 int bits=8;
-uint8_t mimas[8][DATABYTES + 4];
+//uint8_t mimas[8][DATABYTES + 4];
+uint8_t mimas_pwm[20];
 struct spi_ioc_transfer tr[9];
+struct spi_ioc_transfer tr_pwm;
+static uint8_t start_stream_header[4];
 
 static void pabort(const char *s)
 {
@@ -78,7 +81,7 @@ int mimas_send_packet(int chan, uint8_t* data, int len)
 
     if(fd == -1)return(-1);
     int ret;
-    data[0] = 0x10;
+    data[0] = 0x08;
     data[1] = 1<<chan;
     data[2] = len/256;
     data[3] = len%256;
@@ -108,7 +111,7 @@ int mimas_store_packet(int chan, uint8_t* data, int len)
 
     if(fd == -1)return(-1);
     int ret;
-    data[0] = 0x10;
+    data[0] = 0x08;
     data[1] = 1<<chan;
     data[2] = len/256;
     data[3] = len%256;
@@ -117,7 +120,130 @@ int mimas_store_packet(int chan, uint8_t* data, int len)
     return(0);
 }
 
-static uint8_t start_stream_header[4];
+
+int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
+{
+    if(chan>7)return(-3);
+    if(grp>3)return(-13);
+    if((cnt ==0)||(cnt>8)) return(-4);
+    if(fd == -1)return(-1);
+    int i, ret;
+    mimas_pwm[0] = 0x41;
+    mimas_pwm[1] = chan;
+    mimas_pwm[2] = grp;
+    mimas_pwm[3] = cnt;
+    if((chan+cnt)>8)
+    {
+        cnt = 8 - chan;
+    }
+    uint16_t* p = &mimas_pwm[4];
+    for(i=0;i<cnt;i++)
+    {
+        *p = *val;
+        p++;
+        val++;
+    }
+    tr_pwm.len =4u + (2 * i);
+
+    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+
+    return(0);
+}
+
+int mimas_store_pwm_period(uint8_t grp, uint16_t val)
+{
+    if(fd == -1)return(-1);
+    if(grp>3)return(-13);
+    mimas_pwm[0] = 0x21;
+    mimas_pwm[1] = 0;
+    mimas_pwm[2] = grp;
+    mimas_pwm[3] = 1;
+    *(uint16_t*)&mimas_pwm[4] = val;
+    tr_pwm.len = 6u;
+    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+
+    return(0);
+}
+
+
+int mimas_store_pwm_div(uint8_t grp, uint8_t val)
+{
+    if(fd == -1)return(-1);
+    if(grp>3)return(-13);
+    mimas_pwm[0] = 0x22;
+    mimas_pwm[1] = 0;
+    mimas_pwm[2] = grp;
+    mimas_pwm[3] = 1;
+    mimas_pwm[4] = val;
+    tr_pwm.len = 5u;
+    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+
+    return(0);
+}
+
+int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt)
+{
+    if(chan>7)return(-3);
+    if(grp>3)return(-13);
+    if((cnt ==0)||(cnt>8)) return(-4);
+    if(fd == -1)return(-1);
+    int i, ret;
+    mimas_pwm[0] = 0x40;
+    mimas_pwm[1] = chan;
+    mimas_pwm[2] = grp;
+    mimas_pwm[3] = cnt;
+    uint8_t* p = &mimas_pwm[4];
+    for(i=chan;i<cnt;i++)
+    {
+        *p = (*enabled) & 3;
+        p++;
+        enabled++;
+        if(i>7)break;
+    }
+    tr_pwm.len =4u + i;
+    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+    return(0);
+}
+
+int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
+{
+    if(fd == -1)return(-1);
+    if(grp > 3)return(-13);
+    mimas_pwm[0] = 0x20;
+    mimas_pwm[1] = 0;
+    mimas_pwm[2] = grp;
+    mimas_pwm[3] = 1;
+    mimas_pwm[4] = enabled & 1;
+    tr_pwm.len = 5u;
+    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+    return(0);
+}
+
 int mimas_start_stream(uint8_t start_bm, uint8_t proto_bm)
 {
     if(start_bm == 0 ) return(-3);
@@ -151,6 +277,7 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
 
     for(i=0;i<8;i++)
     {
+        if((start_bm & BIT8(i))==0)continue;
         if(tr[i].len>0)
         {
             ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[i]);
@@ -163,6 +290,9 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
             ch = (uint8_t*)(tr[i].tx_buf);
             temp_bm|=ch[1];
             }
+        }
+        else{
+            printf("WARNING: tr[%d] len = %d\n",i,tr[i].len);
         }
     }
 
@@ -178,7 +308,7 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
         }
     }
     start_stream_header[1]= temp_bm/*start_bm*/; /// use the  value that probably wont crash mimas
-    start_stream_header[3]= proto_bm;
+    start_stream_header[2]= proto_bm;
    // printf("MIMAS start %X\n", start_bm);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[8]);
     if (ret < 1)
@@ -194,14 +324,14 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
     //printf("spi times: %ld | %ld \n", ts[1].tv_nsec - ts[0].tv_nsec, ts[2].tv_nsec - ts[0].tv_nsec);
     return(0);
 }
-
+/*
 int spi_main(int argc, char *argv[])
 {
 	int ret = 0;
 	int fd;
 	int i=0, j;
 
-	/*parse_opts(argc, argv);*/
+	//parse_opts(argc, argv);
 	memset(tr,0,sizeof(tr));
     tr[8].tx_buf = (unsigned long)(void*)&mimas[0][0];
 	tr[8].rx_buf = (unsigned long)(void*)NULL;
@@ -209,7 +339,7 @@ int spi_main(int argc, char *argv[])
 	tr[8].delay_usecs = 20;
 	tr[8].speed_hz = speed;
 	tr[8].bits_per_word = 8;
-	mimas[8][0] = 0x20;
+	mimas[8][0] = 0x80;
 	mimas[8][1] = 0xFF;
 	mimas[8][2] = 0;
 	mimas[8][3] = 0;
@@ -217,7 +347,7 @@ int spi_main(int argc, char *argv[])
 	{
 	  tr[i].tx_buf = (unsigned long)(void*)&mimas[i][0];
 	  tr[i].rx_buf = (unsigned long)(void*)NULL;
-	  tr[i].len = /*ARRAY_SIZE(mimas),*/DATABYTES + 4;
+	  tr[i].len =DATABYTES + 4;
 	  tr[i].delay_usecs = delay;
 	  tr[i].speed_hz = speed;
 	  tr[i].bits_per_word = bits;
@@ -274,7 +404,7 @@ int spi_main(int argc, char *argv[])
 
 	return ret;
 }
-
+*/
 int initSPI(void)
 {
 int i, ret;
@@ -313,14 +443,14 @@ int i, ret;
 	printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);
 	//printf("sending %u bytes(%x, %x)\n",DATABYTES + 4, mimas[2], mimas[3]);
 
-	memset(tr,0,sizeof(tr));
+	memset(tr,0,sizeof(struct spi_ioc_transfer));
     tr[8].tx_buf = (unsigned long)(void*)&start_stream_header[0];
 	tr[8].rx_buf = (unsigned long)(void*)NULL;
 	tr[8].len = 4;
 	tr[8].delay_usecs = 0;
 	tr[8].speed_hz = speed;
 	tr[8].bits_per_word = 8;
-	start_stream_header[0] = 0x20;
+	start_stream_header[0] = 0x80;
 	start_stream_header[1] = 0;
 	start_stream_header[2] = 0;
 	start_stream_header[3] = 0;
@@ -333,6 +463,16 @@ int i, ret;
 	  tr[i].speed_hz = speed;
 	  tr[i].bits_per_word = 8;
 	}
+    memset(&tr_pwm,0,sizeof(tr_pwm));
+    memset(mimas_pwm,0,sizeof(mimas_pwm));
+    tr_pwm.tx_buf = (unsigned long)(void*)&mimas_pwm[0];
+    tr_pwm.rx_buf = (unsigned long)(void*)NULL;
+    tr_pwm.len = 0;
+    tr_pwm.delay_usecs = delay;
+    tr_pwm.speed_hz = speed;
+    tr_pwm.bits_per_word = 8;
+
+
 
 return(0);
 }

@@ -416,6 +416,23 @@ int socket_init(node_interfaces_detail_t* ifs)
     return(sockfd);
 }
 
+int socket_set_blocking(const int sockfd, int on)
+{
+   int flags = fcntl(sockfd, F_GETFL, 0);
+   if (flags == -1)
+   {
+    perror("Failed to get sock_flags");
+    return -1;
+   }
+   flags = (on!=0) ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+   if(fcntl(sockfd, F_SETFL, flags)!=0)
+   {
+    perror("Failed to set sock_flags");
+    return -2;
+   }
+   return(0);
+}
+
 int altBind(int sockfd)
 {
 struct sockaddr_ll my_addr;

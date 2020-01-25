@@ -27,11 +27,14 @@
 #include <sys/socket.h>
 #include <string.h>
 #define gettid syscall(SYS_gettid)
-
+uint16_t pwm_v[8];
+uint8_t  pwm_c[8];
+uint16_t pwm_per = 20000;
+volatile int upd_pwm = 0;
 fl_head_t RQ;
 fl_head_t UQ;
-mimaspack_t         mpacks[GLOBAL_OUTPUTS_MAX];
-out_def_t           outs[GLOBAL_OUTPUTS_MAX];
+mimaspack_t         mpacks[GLOBAL_OUTPUTS_MAX ];
+out_def_t           outs[GLOBAL_OUTPUTS_MAX ];
 peer_pack_t         rq_data[RQ_DEPTH];
 trace_msg_t         ev_q[EV_Q_DEPTH];
 post_box_t*         ev_pb = NULL;
@@ -191,16 +194,16 @@ int sendOutToMimas(int oSel)
 void* consumer(void* d)
 {
     uint32_t idx, i, attention;
+
     peer_pack_t *p;
     whole_art_packs_rec_t rec;
     app_node_t *artn = (app_node_t*)d;
     post_box_t* pb = artn->artPB;
     node_t *me = artn->artnode;
     sm_t* sm = &me->sm;
-    int synced = 0;
+
     int  rc;
     uint8_t start_bm;
-    int sync_missing;
     fl_t cn;
     art_net_pack_t      *ap;
     peer_pack_t         *pp;
@@ -378,11 +381,11 @@ void* consumer(void* d)
             {
                 case 	OpPoll:
 				{
+                    printf("Got POLL from %s\n",inet_ntoa(p->sender.sin_addr));
                     make_artnet_resp(p);
 					ap->ArtDmxOut.head.id[0] = '\0';
 					msgRead(&pb->rq_head);
 					//msgRelease(pb,cn); // return this node to unused pile
-                    printf("Got POLL from %s\n",inet_ntoa(pp->sender.sin_addr));
                     continue;
 					break;
 				}
@@ -421,26 +424,41 @@ void* consumer(void* d)
                         case    wait_sync_e:
                         {
                             sm->hasSync = 1;
+                            sm->sync_missing_cnt = 0;
                             printf("Using Sync packets ...\n");
                             continue; // get next Packet
                             break;
                         }
                         case working_e:
                         {
-                            synced = 1;
-                            sync_missing = 0;
                             if(sm->hasSync == 0)
                             {
-                                sm->hasSync = 1;
-                                printf("detected sync packet while working ...\n");
+                                printf("detected sync packet while working. Resetting SM ...\n");
+                                SmReset(me, eResetArtOther);
                                 continue; // get next Packet
+                            }
+                            sm->sync_missing_cnt = 0;
+                            if(sm->syncState == no_sync_yet)
+                            {
+                                sm->syncState = sync_ok;
+                            }
+                            else
+                            {
+                                continue;
                             }
                             break;
                         }
                         default:
                         {
                             printf("Sync received in state %d\n", sm->state);
-                            synced = 1;
+                            if(sm->hasSync == 0)
+                            {
+                                printf("detected sync packet in wrong state. Resetting SM ...\n");
+                                SmReset(me, eResetArtOther);
+                                continue; // get next Packet
+                            }
+                            sm->syncState = sync_ok;
+                            sm->sync_missing_cnt = 0;
                             continue; // get next Packet
                         }
                     }
@@ -449,6 +467,7 @@ void* consumer(void* d)
 				case OpDmx:
 				{
                     clock_gettime(CLOCK_REALTIME, &trms[1]->ts);
+                    me->last_pac_proc = trms[1]->ts;
                     trms[1]->art_addr = ap->ArtDmxOut.a_net.SubUni.subuni_full;
                     post_msg(&ev_pb->rq_head, trms[1],sizeof(trace_msg_t));
                     // check if incoming universe falls in the range we handle
@@ -486,7 +505,7 @@ void* consumer(void* d)
                                 sm->state = wait_sync_e;
                                 printf("Going wait_sync_e\n");
                                 sm->DataOk = 1;
-                                setSockTimout(me->sockfd,1000);
+                                //setSockTimout(me->sockfd,1000);
                                 sm->active_unis = 0;
                                 /*dont break, fall through to wait sync state */
                             }
@@ -506,7 +525,12 @@ void* consumer(void* d)
 							if( (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) && (sm->expected_full_map & BIT64(runi)) )
 							{
 								sm->state = working_e;
-								printf("Going working_e, %u active unis\n", sm->active_unis);
+								time_t now;
+                                time(&now);
+                                struct tm ts = *localtime(&now);
+                                char tsbuf[80];
+                                strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+								printf("Going working_e, %u active unis at %s\n", sm->active_unis, tsbuf);
 								sm->curr_map = 0llu;
 								/*dont return nod yet to pile, it will be used in working state, and returned there.
 								 * also dont break, fall through to working state*/
@@ -562,7 +586,7 @@ void* consumer(void* d)
                                             outs[i].dlen = 0;
                                             outs[i].fillMap = 0;
                                         }
-                                        synced = 0;
+                                        //synced = 0;
                                         continue;
                                     }
                                 }
@@ -577,6 +601,7 @@ void* consumer(void* d)
                             else
                             {
                                 // if this is the first time we receive this universe in this frame do some extras
+                                if(sm->syncState == sync_consumed) sm->syncState = no_sync_yet;
                                 if((sm->curr_map & BIT64(runi)) == 0ul)
                                 {
                                     outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
@@ -585,7 +610,7 @@ void* consumer(void* d)
                                 }
                                 else
                                 {
-                                    if(++sync_missing > (5 * sm->active_unis))
+                                    if(++sm->sync_missing_cnt  > (2 * sm->active_unis))
                                     {
                                         //putNode(&RQ,cn); // done with note, send to unused pile
                                         //msgRelease(pb,cn);
@@ -598,7 +623,7 @@ void* consumer(void* d)
                                 //msgRelease(pb,cn);
                                 msgRead(&pb->rq_head);
 
-                                if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
+                                //if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
                             }
 
                             if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
@@ -629,10 +654,26 @@ void* consumer(void* d)
                 }
             } // switch OpCode closes
 // here starts output Handling
-
+            if(sm->hasSync == 1)
+            {
+                switch(sm->syncState)
+                {
+                    case no_sync_yet:
+                    case sync_consumed:
+                    {
+                        continue;
+                        break;
+                    }
+                    case sync_ok:
+                    {
+                        break;
+                    }
+                }
+            }
             if(sm->curr_map == sm->expected_full_map)
             {
                 //bcm2835_delayMicroseconds(3000ull);
+
                 mSt =mimas_get_state();
                 if(mSt.sys_rdy==0)
                 {
@@ -657,13 +698,23 @@ void* consumer(void* d)
                 }
                 //mimas_start_stream(start_bm,0);
                 //__atomic_add_fetch(&me->frames, 1, __ATOMIC_RELAXED);
-
+                int pwmv = 3* pwm_v[0];
                 clock_gettime(CLOCK_REALTIME, &trms[3]->ts);
-
-                mimas_refresh_start_stream(start_bm,0);
+                if(upd_pwm & 1)
+                {
+                    mimas_store_pwm_val(3, 0,&pwmv,1);
+                    upd_pwm &=(~1);
+                }
+                if(upd_pwm & 2)
+                {
+                    mimas_store_pwm_chCntrol(3, 0, &pwm_c[0],8);
+                    upd_pwm&=(~2);
+                }
+                mimas_refresh_start_stream(start_bm,0x00C0);
                 clock_gettime(CLOCK_REALTIME, &trms[4]->ts);
                 post_msg(&ev_pb->rq_head, trms[3],sizeof(trace_msg_t));
                 post_msg(&ev_pb->rq_head, trms[4],sizeof(trace_msg_t));
+                me->last_mimas_ref = trms[3]->ts;
 
                 //clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &tmp);
                 //timesum+=(tmp.tv_nsec - timers[idle_e].tv_nsec);
@@ -681,7 +732,7 @@ void* consumer(void* d)
                     outs[i].dlen = 0;
                     outs[i].fillMap = 0;
                 }
-                synced = 0;
+                sm->syncState = sync_consumed;
                 //timers[idle_e].tv_sec = tmp.tv_sec;
 
             }
@@ -854,6 +905,7 @@ void* producer(void* d)
     trm.seq = 0;
     int batch=1;
     sm_state_e sm_state_cache;
+   // i=socket_set_blocking(n->sockfd, 0);
  #define handle_error_en(en, msg) \
                do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
 
@@ -911,16 +963,24 @@ void* producer(void* d)
         p = packs[i];
         if(p==NULL) break;
         iovecs[i].iov_base = &p->pl.art;
+        msgs[i].msg_hdr.msg_name = &p->sender;
+        msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
     k = i;
+    setSockTimout(n->sockfd, 0);
     while(1)
     {
         //addr_len = sizeof(struct sockaddr_in);
         //p = &rq_data[idx];
 
         //sock_ret = recvfrom(mysock,(void*)&p->pl, sizeof(any_prot_pack_t),0, (struct sockaddr*)&p->sender, &addr_len);
-        timeout.tv_sec = 0;
-        timeout.tv_nsec = 40ul * MILIS;
+
+        if((n->sm.DataOk == 1) && (n->sm.prev_state!=working_e))
+        {
+            setSockTimout(n->sockfd,150);
+        }
+        timeout.tv_sec = 0l;
+        timeout.tv_nsec = 250l * MILIS;
         sm_state_cache = n->sm.state;
         if(sm_state_cache!=working_e)batch=1;
         msgcnt = recvmmsg(n->sockfd, msgs, k, MSG_WAITALL/* MSG_WAITFORONE */, &timeout);
@@ -957,6 +1017,7 @@ void* producer(void* d)
             clock_gettime(CLOCK_REALTIME, &trm.ts);
             post_msg(&ev_pb->rq_head, &trm, sizeof(trace_msg_t));
             art_net_pack_t* a;
+            n->last_rx = trm.ts;
             //msgRezervedPostNB(pb, cn);
             //msgWritten(&pb->rq_head);
             /*printf("Prod: got %u msgs\n", msgcnt);
@@ -977,6 +1038,8 @@ void* producer(void* d)
                     p = packs[i];
                     if(p==NULL) break;
                     iovecs[i].iov_base = &p->pl.art;
+                    msgs[i].msg_hdr.msg_name = &p->sender;
+                    msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
                 }
                 k = i;
             }while(k<1);
@@ -1038,8 +1101,17 @@ void* producer(void* d)
             }
             else
             {
-                setSockTimout(n->sockfd, 10000);
+                struct timespec sockerrTs;
+                clock_gettime(CLOCK_REALTIME, &sockerrTs);
+                printf("Last rx %ld.%09ld\nLast pp %ld.%09ld\nLast mr %ld.%09ld\nSock er %ld.%09ld\n", \
+                n->last_rx.tv_sec,n->last_rx.tv_nsec, \
+                n->last_pac_proc.tv_sec,n->last_pac_proc.tv_nsec, \
+                n->last_mimas_ref.tv_sec,n->last_mimas_ref.tv_nsec, \
+                sockerrTs.tv_sec,sockerrTs.tv_nsec);
+                usleep(500000);
+                setSockTimout(n->sockfd, 0);
                 n->sm.DataOk = 0;
+
                 if(errno == EAGAIN)
                 {
                     int  lockFree=0;
@@ -1047,9 +1119,8 @@ void* producer(void* d)
                     do{
                         lockFree =  pthread_spin_trylock(&pb->rq_head.lock) ;
                     }while((lockFree !=0  )&&(tries++<100));
-
-                    time(&now);
                     SmReset(n, eResetSockTimeout);
+                    time(&now);
                     ts = *localtime(&now);
                     strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
                     printf("EAGAIN %s : lock %d\n",tsbuf,lockFree);
@@ -1058,13 +1129,14 @@ void* producer(void* d)
                     //usleep(1);
                     //pthread_yield();
                     msgcnt = 0;
+                    /*
                     i = close(n->sockfd);
                     if(i != 0) perror("close Socket:");
                     else
                     do{
                     i = socketStart(n,ARTNET_PORT);
                     if(i)sleep(1);
-                    }while(i!=0);
+                    }while(i!=0);*/
                     continue;
                 }
                 else
@@ -1127,6 +1199,8 @@ void testLists(void)
     rc = remItem(h, &b);
 }
 */
+
+
 int main(void)
 {
     int res;
@@ -1157,16 +1231,6 @@ int main(void)
     msg.hdr.msgid = def_msg_e;
     msg.hdr.msgLen = 4;
     msg.pl.itemId = 100;
-    /*fl_t mh = msgPostBL(NULL,&msg);
-    resp = msgRxBL(NULL);
-    msgRelease(NULL,mh);
-    */
-/*
-    memset((void*)&rf, 0, sizeof(recFile_t));
-    rf.maxLen = 10ul * MBYTES;
-    strcat(rf.fname, "artRec1");
-    i = createRecFile(&rf);
-    */
 
     anetp->artPB = createPB(RQ_DEPTH,"ArtNetPB", (void*)&rq_data[0]);
     ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0]);
@@ -1185,19 +1249,23 @@ int main(void)
     //getInterfaces();
     socketStart(anetp->artnode, ARTNET_PORT);
     socketStart(ascnp->artnode, ACN_SDT_MULTICAST_PORT);
-    NodeInit(anetp, (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT), 0x11);
+    //NodeInit(anetp, (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT), 0x11);
+    NodeInit(anetp, (64), 0x11);
     art_set_node(anetp->artnode);
     anetp->artnode->intLimit = 50;
     SmReset(anetp->artnode,eResetInit);
-/*
-    sock_sec = socket_init(NULL);
-    if(sock_sec>-1)
-    {
-        add_IP_Address("2.250.250.1");
-        sec_ip =  inet_addr("2.250.250.1");
-        rc = sock_bind(sock_sec, "wlan0",&sec_ip, ARTNET_PORT);
-    }
-*/
+
+    sleep(1);
+    pwm_per = 59999;
+    pwm_c[0] = 0x1;
+    pwm_v[0] = 2399;
+    int div = 39;
+     mimas_store_pwm_div(3, div);
+    mimas_store_pwm_period(3, pwm_per);
+    mimas_store_pwm_chCntrol(3, 0,pwm_c,1);
+    mimas_store_pwm_val(3, 0,pwm_v,1);
+    mimas_store_pwm_gCntrol(3, 1);
+
     pthread_create(&anetp->artnode->con_tid, NULL, consumer,(void*)anetp);
     rc = pthread_setname_np(anetp->artnode->con_tid, "ArtNetCons\0");
     if(rc)
@@ -1211,38 +1279,44 @@ int main(void)
     {
         perror("Producer1 thread rename failed");
     }
-
-    size_t addr_len;
-    int sock_ret;
     pthread_t time_one_sec;
     pthread_create(&time_one_sec,NULL,one_sec,(void*)anetp);
+
+    int dir = 25;
+
+
+    do
+    {
+         usleep(62500);
+         pwm_v[0]+=dir;
+         if(pwm_v[0]>2300)
+         {
+            dir = -12;
+         }
+         else
+         {
+
+            if(pwm_v[0]<600)
+                dir = 12;
+         }
+         upd_pwm|=1;
+    }while(1);
+
     printf("Starting Web Server...\n");
     while(1)
     {
-    /*
-        addr_len = sizeof(struct sockaddr_in);
-        sock_ret = recvfrom(sock131,(void*)&e131p, sizeof(e131_pack_t),0, &acnpeer.peer, &addr_len);
-        if(sock_ret>0)
-        {
-            if(0==parse_e131(&e131p))
-            {
-                outs[0].dlen = 450;
-                memcpy(outs[0].wrPt[0], e131p.dat.dmp.propVals, 450);
-                if((rc = mimas_store_packet(0,(uint8_t*)outs[0].mimaPack,outs[0].dlen))!=0)
-                {
-                    printf("mimas_store_packet@%u ERROR %d\n", 0, rc);
-                }
-                else{
-                    mimas_refresh_start_stream(1,0);
-                }
-            }
-        }
-    */
-
         webServStart();
-
         printf("Web Server exited, restarting...\n");
         sleep(1);
     }
     return(0);
 }
+/*
+    sock_sec = socket_init(NULL);
+    if(sock_sec>-1)
+    {
+        add_IP_Address("2.250.250.1");
+        sec_ip =  inet_addr("2.250.250.1");
+        rc = sock_bind(sock_sec, "wlan0",&sec_ip, ARTNET_PORT);
+    }
+*/

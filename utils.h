@@ -2,7 +2,7 @@
 #define UTILS_H_INCLUDED
 #include "type_defs.h"
 #include "protocolCommon.h"
-
+#include <fcntl.h>
 #define PROD_PRIO_NICE (-12)
 #define CONS_PRIO_NICE (-18)
 
@@ -39,7 +39,14 @@ int initSPI(void);
 int mimas_start_stream(uint8_t start_bm, uint8_t proto_bm);
 int mimas_store_packet(int chan, uint8_t* data, int len);
 int mimas_send_packet(int chan, uint8_t* data, int len);
-int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm);
+int mimas_refresh_start_stream(uint8_t start_bm, uint16_t proto_bm);
+
+int mimas_store_pwm_val(uint8_t grp, int chan, uint16_t* val, uint8_t cnt);
+int mimas_store_pwm_period(uint8_t grp, uint16_t val);
+int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt);
+int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled);
+int mimas_store_pwm_div(uint8_t grp, uint8_t val);
+
 void mapColor(uint8_t *src, out_def_t *oout, int sUni);
 int setSockTimout(int sock, int ms);
 int check_wireless(const char* ifname);
@@ -62,4 +69,5 @@ int initMimas(void);
 void NodeInit(app_node_t* n, uint8_t maxUniCount, addressing_t start_uni_addr);
 int socketStart(node_t* n, uint16_t portno);
 int setIP(char* newIP, int ifIdx);
+int socket_set_blocking(const int sockfd, int on);
 #endif // UTILS_H_INCLUDED

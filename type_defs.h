@@ -44,7 +44,7 @@
 #endif
 
 
-#define     GLOBAL_OUTPUTS_MAX 8
+#define     GLOBAL_OUTPUTS_MAX 16
 #define     UNI_PER_OUT 5
 
 #define NODE_VERSION ((uint16_t)0x0001)
@@ -174,7 +174,12 @@ typedef struct {
 
 typedef struct sockaddr_in sock_info_t;
 typedef uint16_t addressing_t;
-
+typedef enum
+{
+    no_sync_yet = 0,
+    sync_ok,
+    sync_consumed
+}artNetSyncState_e;
 typedef struct
 {
 	sm_state_e		state, prev_state;
@@ -198,6 +203,8 @@ typedef struct
 	uint8_t         universes_count;
 	uint8_t         min_uni;
 	uint8_t         active_unis;
+	uint8_t         sync_missing_cnt;
+	artNetSyncState_e syncState;
 }sm_t; /* artnet state machine struct */
 
 typedef struct
@@ -222,7 +229,10 @@ typedef struct
     uint32_t packetsCnt;
     float       fps;
     uint32_t    frames;
-
+    uint32_t    barr[8];
+    struct timespec last_rx;
+    struct timespec last_pac_proc;
+    struct timespec last_mimas_ref;
 }node_t;
 
 #include "artNet.h"
