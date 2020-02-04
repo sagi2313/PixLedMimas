@@ -35,6 +35,7 @@ fl_head_t RQ;
 fl_head_t UQ;
 mimaspack_t         mpacks[GLOBAL_OUTPUTS_MAX ];
 out_def_t           outs[GLOBAL_OUTPUTS_MAX ];
+device_type_e       outputs_dev_map[64] = {dev_unknown};
 peer_pack_t         rq_data[RQ_DEPTH];
 trace_msg_t         ev_q[EV_Q_DEPTH];
 post_box_t*         ev_pb = NULL;
@@ -42,12 +43,24 @@ post_box_t*         ev_pb = NULL;
 
 int sock_sec;
 app_node_t prods[2];
-
 app_node_t* anetp=&prods[0];
 app_node_t* ascnp=&prods[1];
 int altBind(int sockfd);
-
 recFile_t rf;
+
+#include <sched.h>
+enum{
+idle_e=0,
+packet_proc_e,
+packet2packet_e
+}times_e;
+struct timespec timers[3];
+struct timespec tmp;
+uint32_t timeloop, proc_cnt=0;
+uint64_t timesum;
+uint64_t timesum_mimas;
+uint64_t timesum_proc;
+clock_t t1,t2, t3, p1,p2;
 
 
 void print_trace (void)
@@ -147,23 +160,9 @@ void InitOuts(void)
             outs[i].wrPt[j] = pt;
             pt+=outs[i].uniLenLimit[j];
         }
+        if(i < (MIMAS_OUT_CNT  * MIMAS_DEV_CNT))outputs_dev_map[i] = dev_pixels;
     }
 }
-#include <sched.h>
-enum{
-idle_e=0,
-packet_proc_e,
-packet2packet_e
-}times_e;
-struct timespec timers[3];
-struct timespec tmp;
-uint32_t timeloop, proc_cnt=0;
-uint64_t timesum;
-uint64_t timesum_mimas;
-uint64_t timesum_proc;
-clock_t t1,t2, t3, p1,p2;
-
-
 
 int sendOutToMimas(int oSel)
 {
@@ -194,8 +193,8 @@ int sendOutToMimas(int oSel)
 void* consumer(void* d)
 {
     uint32_t idx, i, attention;
-
-    peer_pack_t *p;
+    peer_pack_t     ppack;
+    peer_pack_t *p = &ppack;
     whole_art_packs_rec_t rec;
     app_node_t *artn = (app_node_t*)d;
     post_box_t* pb = artn->artPB;
@@ -276,6 +275,7 @@ void* consumer(void* d)
     printf("ClockRes = %lusec, %u nsec\n", timers[1].tv_sec, timers[1].tv_nsec);
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &timers[idle_e]);
     t1 = clock();
+
     //art_resp_e ArtNetDecode(const peer_pack_t* peerPack)
     while(1)
     {
@@ -325,8 +325,9 @@ void* consumer(void* d)
         trms[0]->msg_cnt = popcnt++;
         do
         {
-            p = getMsg(&pb->rq_head);
-        }while(p == NULL);
+            ret = getCopyMsg(&pb->rq_head, p);
+            //p = getMsg(&pb->rq_head);
+        }while(/*p == NULL*/ret);
 
         clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
         post_msg(&ev_pb->rq_head, trms[0],sizeof(trace_msg_t));
@@ -383,8 +384,8 @@ void* consumer(void* d)
 				{
                     printf("Got POLL from %s\n",inet_ntoa(p->sender.sin_addr));
                     make_artnet_resp(p);
-					ap->ArtDmxOut.head.id[0] = '\0';
-					msgRead(&pb->rq_head);
+					//ap->ArtDmxOut.head.id[0] = '\0';
+					//msgRead(&pb->rq_head);
 					//msgRelease(pb,cn); // return this node to unused pile
                     continue;
 					break;
@@ -406,10 +407,10 @@ void* consumer(void* d)
 				case	OpOther:
 				{
                     //putNode(&RQ, cn);
-                    ap->ArtDmxOut.head.id[0] = '\0';
+                    //ap->ArtDmxOut.head.id[0] = '\0';
 					printf("ArtErr unknown OpCode %x\n", ap->ArtDmxOut.head.OpCode.OpCode);
 					//msgRelease(pb,cn);
-					msgRead(&pb->rq_head);
+					//msgRead(&pb->rq_head);
 					continue; // get next Packet
 					break;
 				}
@@ -417,7 +418,7 @@ void* consumer(void* d)
 				{
                     //putNode(&RQ, cn);
                     //msgRelease(pb,cn);
-                    msgRead(&pb->rq_head);
+                    //msgRead(&pb->rq_head);
                     switch(sm->state)
 					{
                         case	out_of_sync_e:
@@ -476,7 +477,7 @@ void* consumer(void* d)
                     {
                         //putNode(&RQ, cn);
                         //msgRelease(pb,cn);
-                        msgRead(&pb->rq_head);
+                        //msgRead(&pb->rq_head);
                         continue; // dont care about this universe, get next Packet
                         break;
                     }
@@ -513,7 +514,7 @@ void* consumer(void* d)
                             {
                                 //putNode(&RQ, cn); // return this node to unused pile
                                 //msgRelease(pb,cn);
-                                msgRead(&pb->rq_head);
+                                //msgRead(&pb->rq_head);
                                 sm->expected_full_map|=BIT64(runi);
                                 continue;  // don't process  output, got get packets
                                 break;
@@ -539,7 +540,7 @@ void* consumer(void* d)
 							{
 								//putNode(&RQ, cn); // return this node to unused pile
 								//msgRelease(pb,cn);
-								msgRead(&pb->rq_head);
+								//msgRead(&pb->rq_head);
 								if((sm->expected_full_map & BIT64(runi) )== 0llu)sm->active_unis++;
 								sm->expected_full_map|=BIT64(runi);
 								continue;
@@ -563,11 +564,9 @@ void* consumer(void* d)
 */
                                // printf("currMap %lu runi = %u oSel = %u\n",sm->curr_map, runi, oSel);
                                 outs[oSel].fillMap|=BIT8(sUni);
-                                mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
-                                //putNode(&RQ,cn); // done with note, send to unused pile
-                                //msgRelease(pb,cn);
-                                msgRead(&pb->rq_head);
-                                if((sm->curr_map & BIT64(runi)))
+                                mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);  // write mapped pixel data in outbuffer
+                                //msgRead(&pb->rq_head);                          // free up that msg slot, data is now copied in out buffer
+                                if((sm->curr_map & BIT64(runi)))    // if this uni was already mapped in output, it will be overwritten by new packet, from previous 2 lines
                                 {
                                     fl_head_t info;
                                     if(sm->expected_full_map & BIT64(runi))
@@ -614,32 +613,34 @@ void* consumer(void* d)
                                     {
                                         //putNode(&RQ,cn); // done with note, send to unused pile
                                         //msgRelease(pb,cn);
-                                        msgRead(&pb->rq_head);
+                                        //msgRead(&pb->rq_head);
                                         SmReset(me, eResetFrErr);
                                     }
                                 }
                                 mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
                                 //putNode(&RQ,cn); // done with note, send to unused pile
                                 //msgRelease(pb,cn);
-                                msgRead(&pb->rq_head);
+                                //msgRead(&pb->rq_head);
 
                                 //if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
                             }
-
-                            if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
+                            if(outputs_dev_map[oSel] == dev_pixels)
                             {
-                                rc = sendOutToMimas(oSel);
-                                if(rc == 0)
+                                if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
                                 {
-                                    start_bm|=BIT8(oSel);
-                                    clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
-                                    post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
-                                }
-                                else
-                                {
-                                    start_bm&=0xFF & (~BIT8(oSel));
-                                    outs[oSel].fillMap = 0;
-                                    printf("Error %d from mimas sending %d output\n",rc,oSel);
+                                    rc = sendOutToMimas(oSel);
+                                    if(rc == 0)
+                                    {
+                                        start_bm|=BIT8(oSel);
+                                        clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
+                                        post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
+                                    }
+                                    else
+                                    {
+                                        start_bm&=0xFF & (~BIT8(oSel));
+                                        outs[oSel].fillMap = 0;
+                                        printf("Error %d from mimas sending %d output\n",rc,oSel);
+                                    }
                                 }
                             }
                             break; // go process out
@@ -650,7 +651,7 @@ void* consumer(void* d)
                 }   //OpCodeDMX closes
                 default:
                 {
-                    msgRead(&pb->rq_head);
+                    //msgRead(&pb->rq_head);
                 }
             } // switch OpCode closes
 // here starts output Handling
@@ -1260,7 +1261,7 @@ int main(void)
     pwm_c[0] = 0x1;
     pwm_v[0] = 2399;
     int div = 39;
-     mimas_store_pwm_div(3, div);
+    mimas_store_pwm_div(3, div);
     mimas_store_pwm_period(3, pwm_per);
     mimas_store_pwm_chCntrol(3, 0,pwm_c,1);
     mimas_store_pwm_val(3, 0,pwm_v,1);

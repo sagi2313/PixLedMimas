@@ -216,7 +216,7 @@ typedef struct
     pthread_t       con_tid;
     pthread_t       prod_tid;
     addressing_t    art_start_uni;
-    uint8_t         intLimit;
+    uint8_t         intLimit; // intensity limit
     uint8_t         universe_count;
     uint8_t         current_if_idx;
     node_interfaces_t ifs;
@@ -285,18 +285,62 @@ typedef struct
     };
 }trace_msg_t;
 
-typedef struct  pix_map__t* pixmap_t;
-
-typedef struct pix_map__t
+typedef enum
 {
-    color_mapping_e colMap;
-   // addressing_t    Universe;
+    dev_unknown=0,
+    dev_pixels,
+    dev_pwm,
+    dev_dmx
+
+}device_type_e;
+
+
+typedef struct
+{
+    //mimas_device_t* mimasdev;
     uint16_t        startCh;
-    uint16_t        outByteOffset;
-    uint8_t         pixCount;
-    uint8_t         outId;
-    pixmap_t        nxt;
-}pix_map_t;
+    uint16_t        endCh;
+    uint16_t        channel_count;
+    void*           write_func;
+    void*           refresh_func;
+    color_mapping_e colMap;
+}pixel_dev_t;
+
+
+typedef struct
+{
+    //mimas_device_t* mimasdev;
+    uint16_t        startCh;
+    uint16_t        endCh;
+    uint16_t        channel_count;
+}pwm_dev_t;
+
+
+
+typedef struct  art_map__t* artmap_t;
+
+typedef struct art_map__t
+{
+
+    device_type_e   dev_type;
+    uint16_t        startCh;
+    uint16_t        endCh;
+    uint16_t        channel_count;
+    union{
+        pwm_dev_t   pwm_dev;
+        pixel_dev_t pix_dev;
+    };
+    union{
+        uint16_t        dev_id;
+        struct{
+            uint16_t    outId:3;
+            uint16_t    outCh:5;
+            uint16_t    devSel:8;
+        };
+    };
+    artmap_t        nxt;
+};
+
 
 #include "rq.h"
 typedef struct post_box_t* postbox;

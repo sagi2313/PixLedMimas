@@ -73,6 +73,21 @@ void msgRead(fl_head_t* hd)
     hd->tailStep++;
 }
 
+int getCopyMsg(fl_head_t* hd, peer_pack_t* pack)
+{
+    register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
+    if(count <1)return(-1);
+    pthread_spin_lock(&hd->lock);
+    hd->count = __atomic_sub_fetch(&hd->count, 1, __ATOMIC_RELAXED);
+    *pack = hd->rq[hd->tail];
+    hd->tail = ((++hd->tail) & IDXMASK);
+    hd->tailStep++;
+    pthread_spin_unlock(&hd->lock);
+
+
+    return (0);
+}
+
 void msgWritten(fl_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);

@@ -27,6 +27,7 @@ inline void mapColor(uint8_t *src, out_def_t *oout, int sUni)
     uint_fast32_t i;
     uint8_t* dst = oout->wrPt[sUni];
     uint8_t il = anetp->artnode->intLimit;
+    uint32_t tint;
     if(il == 0 )
     {
         memset((void*)dst, 0, oout->uniLenLimit[sUni]);
@@ -38,22 +39,27 @@ inline void mapColor(uint8_t *src, out_def_t *oout, int sUni)
         {
             for(i=0;i<oout->uniLenLimit[sUni];)
             {
-                dst[i] = ((il * src[i+1]) / 100u);
-                dst[i+1] = ((il * src[i]) / 100u);
-                dst[i+2] = ((il * src[i+2]) / 100u);
+                tint = src[i + 1];
+                tint *= il;
+                dst[i] = (uint8_t)(tint / 100u);
+
+                tint = src[i];
+                tint *= il;
+                dst[i + 1] = (tint/ 100u);
+
+                tint = src[i + 2];
+                tint *= il;
+                dst[i + 2] = (tint / 100u);
                 i+=3;
             }
             break;
         }
-        //case rgb_map_e:
-        default:
+        default: // unknown vector layout ignores intensity limit at this point
         {
             memcpy((void*)dst, (void*)src, oout->uniLenLimit[sUni]);
             break;
         }
-
     }
-
 }
 
 int setSockTimout(int sock, int ms)

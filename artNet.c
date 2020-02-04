@@ -154,6 +154,7 @@ void make_artnet_resp(peer_pack_t* pp)
 			printf("Artnet Poll Resp to %s:error(%u,%d)\n", inet_ntoa(pp->sender.sin_addr),cnt, j);
 			show_socket_error_reason(Node->sockfd);
 		}
+		usleep(10000);
 		//if(pr->swOut[i] == 15)				pr->subSwitch ++;
 		pr->subSwitch = (abs_addr >> 4);
 		//pr->subSwitch = Node->app_cfg.art_start_uni.SubUni.subnet + (k/16);

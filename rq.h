@@ -13,7 +13,7 @@
 #ifdef      LL_BUFFER
 #define     RQ_DEPTH    (8u * (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))
 #else
-#define     RQ_DEPTH    (1024u)
+#define     RQ_DEPTH    (2048u)
 #endif
 
 typedef enum{
@@ -103,6 +103,7 @@ void  setDefPB(const post_box_t* pb);
 void msgWritten(fl_head_t* hd);
 void msgWrittenMulti(fl_head_t* hd, int cnt);
 void msgRead(fl_head_t* hd);
+int getCopyMsg(fl_head_t* hd, peer_pack_t* pack);
 #ifndef LL_BUFFER
 #define INC_HEAD( H ) \
     H.head = ((++H.head) & IDXMASK)

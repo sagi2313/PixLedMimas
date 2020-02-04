@@ -16,7 +16,7 @@ void SmReset(node_t* n, sm_reset_causes_e cause)
     int maxUni =(n->universe_count >(GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))?(GLOBAL_OUTPUTS_MAX * UNI_PER_OUT):n->universe_count ;
 
     maxUni+= (n->art_start_uni  - 1);
-    sm->endNet = maxUni;///( maxUni > (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))?(GLOBAL_OUTPUTS_MAX * UNI_PER_OUT): maxUni;
+    sm->endNet = maxUni;
     sm->universes_count = n->universe_count;
     sm->min_uni = 255;
     printf("SM: State Machine reset(%s)\n",  rstcauses[cause]);
