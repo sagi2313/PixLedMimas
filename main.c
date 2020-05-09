@@ -17,7 +17,7 @@
 #include <semaphore.h>
 #include "recorder.h"
 #include <signal.h>
-
+#include <sched.h>
 #include <sys/ucontext.h>
 #include <ucontext.h>
 #include <execinfo.h>
@@ -26,7 +26,11 @@
 #include <sys/syscall.h>
 #include <sys/socket.h>
 #include <string.h>
+#include "vdevs.h"
+#include "mimas_cmd_defs.h""
 #define gettid syscall(SYS_gettid)
+
+
 uint16_t pwm_v[8];
 uint8_t  pwm_c[8];
 uint16_t pwm_per = 20000;
@@ -48,7 +52,7 @@ app_node_t* ascnp=&prods[1];
 int altBind(int sockfd);
 recFile_t rf;
 
-#include <sched.h>
+
 enum{
 idle_e=0,
 packet_proc_e,
@@ -136,9 +140,22 @@ void setHandler(void (*handler)(int,siginfo_t *,void *))
     printf("Done setting up SIG_HAN\n");
 }
 
+
+void make_a_dev()
+{
+    ws_pix_vdev_t   vd;
+    vd.pixel_count = 6500;
+    vd.pix_per_uni = 170;
+    vd.col_map = grb_map_e;
+    vd.start_address = 0;
+    build_dev_ws(&vd);
+
+}
+
 void InitOuts(void)
 {
     int i, j;
+    make_a_dev();
     uint8_t *pt;
     for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
     {
@@ -160,33 +177,55 @@ void InitOuts(void)
             outs[i].wrPt[j] = pt;
             pt+=outs[i].uniLenLimit[j];
         }
-        if(i < (MIMAS_OUT_CNT  * MIMAS_DEV_CNT))outputs_dev_map[i] = dev_pixels;
+        if(i < (MIMAS_STREAM_OUT_CNT  * MIMAS_DEV_CNT))outputs_dev_map[i] = dev_pixels;
     }
 }
+
 
 int sendOutToMimas(int oSel)
 {
     mimas_state_t mSt;
     mSt =mimas_get_state();
-    if(mSt.sys_rdy==0)
+    if( mSt.idle == 1 )
     {
-        //printf("WARNING(start): mimas not ready\n");
-        do{
-             //mimas_prn_state(&mSt);
-             if(mSt.idle==1)
-             {
-                mimas_prn_state(&mSt);
-                MIMAS_RESET
-                printf("WARNING(start): mimas reset\n");
-                bcm2835_delayMicroseconds(10000ull);
-             }
-             bcm2835_delayMicroseconds(2500ull);
-             mSt =mimas_get_state();
-         }while( (mSt.sys_rdy == 0) || (mSt.idle ==1));
-         //printf("(start): mimas ready\n");
-         //mimas_prn_state(&mSt);
+        do
+        {
+            mimas_prn_state(&mSt);
+            time_t now;
+            time(&now);
+            struct tm ts = *localtime(&now);
+            char tsbuf[80];
+            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+            MIMAS_RESET
+            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__, __LINE__, tsbuf);
+            bcm2835_delayMicroseconds(10000ull);
+            mSt =mimas_get_state();
+            mimas_prn_state(&mSt);
+        }while(mSt.idle==1);
+        return(-110);
     }
-    //mimas_send_packet(oSel,(uint8_t*)outs[oSel].mimaPack,outs[oSel].dlen);
+    int loops = 0;
+    while( mSt.sys_rdy == 0 )
+    {
+        if(++loops > 250) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
+        {
+            printf("Mimas stuck badly!\n");
+            mimas_prn_state(&mSt);
+            time_t now;
+            time(&now);
+            struct tm ts = *localtime(&now);
+            char tsbuf[80];
+            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+            MIMAS_RESET
+            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__,__LINE__, tsbuf);
+            bcm2835_delayMicroseconds(10000ull);
+            mSt =mimas_get_state();
+            mimas_prn_state(&mSt);
+            return(-100);
+        }
+        bcm2835_delayMicroseconds(100ull);
+        mSt =mimas_get_state();
+     }
     return(mimas_store_packet(oSel,(uint8_t*)outs[oSel].mimaPack,outs[oSel].dlen));
 }
 
@@ -202,7 +241,7 @@ void* consumer(void* d)
     sm_t* sm = &me->sm;
 
     int  rc;
-    uint8_t start_bm;
+    uint16_t start_bm;
     fl_t cn;
     art_net_pack_t      *ap;
     peer_pack_t         *pp;
@@ -227,6 +266,7 @@ void* consumer(void* d)
     trm[cons_mimas_refreshed].ev = cons_mimas_refreshed;
     trm[cons_mimas_start].ev = cons_mimas_start;
     uint32_t popcnt=0;
+    uint16_t pwmv ;
     trace_msg_t *trms[5];
     trms[0]=&trm[0];
     trms[1]=&trm[1];
@@ -322,10 +362,27 @@ void* consumer(void* d)
             //continue;
         }
         */
+
         trms[0]->msg_cnt = popcnt++;
         do
         {
+            usleep(10);
+            if(upd_pwm & 1)
+            {
+                //pwmv = 3* pwm_v[0];
+                //for(i=0;i<8;i++){
+                //mimas_store_pwm_val(PWM_GRP_ALL, i, &pwm_v[i]/*&pwmv*/,1);
+                mimas_store_pwm_val(PWM_GRP_ALL, 0, pwm_v/*&pwmv*/,8);
+                //}
+                upd_pwm &=(~1);
+            }
+            if(upd_pwm & 2)
+            {
+                mimas_store_pwm_chCntrol(PWM_GRP_ALL, 0, &pwm_c[0],8);
+                upd_pwm&=(~2);
+            }
             ret = getCopyMsg(&pb->rq_head, p);
+
             //p = getMsg(&pb->rq_head);
         }while(/*p == NULL*/ret);
 
@@ -631,13 +688,13 @@ void* consumer(void* d)
                                     rc = sendOutToMimas(oSel);
                                     if(rc == 0)
                                     {
-                                        start_bm|=BIT8(oSel);
+                                        start_bm|=BIT32(oSel);
                                         clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
                                         post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
                                     }
                                     else
                                     {
-                                        start_bm&=0xFF & (~BIT8(oSel));
+                                        start_bm&=(0x3FF & (~BIT32(oSel)));
                                         outs[oSel].fillMap = 0;
                                         printf("Error %d from mimas sending %d output\n",rc,oSel);
                                     }
@@ -678,39 +735,32 @@ void* consumer(void* d)
                 mSt =mimas_get_state();
                 if(mSt.sys_rdy==0)
                 {
+                    int loops=0;
                     while( (mSt.sys_rdy == 0) || (mSt.idle ==1))
                     {
                         //usleep(50);
                          bcm2835_delayMicroseconds(10ull);
                          //mimas_prn_state(&mSt);
                          mSt =mimas_get_state();
-                         if(mSt.idle==1) // means mimas is busy
+                         if(++loops > 3)
                          {
-                            mimas_prn_state(&mSt);
-                            MIMAS_RESET
-                            printf("WARNING(start): mimas reset\n");
-                            bcm2835_delayMicroseconds(1000ull);
-                         }
-                         bcm2835_delayMicroseconds(250ull);
-                         mSt =mimas_get_state();
+                             if((mSt.idle==1) || (mSt.sys_rdy ==0)) // means mimas is busy
+                             {
+                                mimas_prn_state(&mSt);
+                                MIMAS_RESET
+                                printf("WARNING(start): mimas reset. line: %d\n", __LINE__);
+                                bcm2835_delayMicroseconds(1000ull);
+                             }
+                             bcm2835_delayMicroseconds(250ull);
+                             mSt =mimas_get_state();
+                             loops = 0;
+                        }
                      }
-                     //printf("(start): mimas ready\n");
-                     //mimas_prn_state(&mSt);
                 }
                 //mimas_start_stream(start_bm,0);
                 //__atomic_add_fetch(&me->frames, 1, __ATOMIC_RELAXED);
-                int pwmv = 3* pwm_v[0];
+
                 clock_gettime(CLOCK_REALTIME, &trms[3]->ts);
-                if(upd_pwm & 1)
-                {
-                    mimas_store_pwm_val(3, 0,&pwmv,1);
-                    upd_pwm &=(~1);
-                }
-                if(upd_pwm & 2)
-                {
-                    mimas_store_pwm_chCntrol(3, 0, &pwm_c[0],8);
-                    upd_pwm&=(~2);
-                }
                 mimas_refresh_start_stream(start_bm,0x00C0);
                 clock_gettime(CLOCK_REALTIME, &trms[4]->ts);
                 post_msg(&ev_pb->rq_head, trms[3],sizeof(trace_msg_t));
@@ -1201,6 +1251,21 @@ void testLists(void)
 }
 */
 
+int initMessaging(void)
+{
+    memset((void*)(ev_q), 0, sizeof(ev_q));
+    memset((void*)(rq_data), 0, sizeof(rq_data));
+    ev_pb = createPB(EV_Q_DEPTH,"EVQ",ev_q);
+    post_box_t* mainPB =createPB(EV_Q_DEPTH,"MAINPB", (void*)&rq_data[0]);
+    if(mainPB)
+    {
+        setDefPB(mainPB);
+        return(0);
+    }
+    return(-1);
+}
+
+void pmwTest();
 
 int main(void)
 {
@@ -1216,36 +1281,27 @@ int main(void)
         printf("Error %d init bcm2835\n", rc);
         return(-1);
     }
-    in_addr_t sec_ip;
-    struct ifaddrs ipres;
 
-    memset((void*)(ev_q), 0, sizeof(ev_q));
-    memset((void*)(rq_data), 0, sizeof(rq_data));
-    ev_pb = createPB(EV_Q_DEPTH,"EVQ",ev_q);
-    post_box_t* mainPB =createPB(EV_Q_DEPTH,"MAINPB", (void*)&rq_data[0]);
-    if(mainPB)
-    {
-        setDefPB(mainPB);
-    }
-    msg_t msg;
-    msg_t* resp;
-    msg.hdr.msgid = def_msg_e;
-    msg.hdr.msgLen = 4;
-    msg.pl.itemId = 100;
-
+    initMessaging();
     anetp->artPB = createPB(RQ_DEPTH,"ArtNetPB", (void*)&rq_data[0]);
     ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0]);
     anetp->artnode = createNode(protoArtNet);
     ascnp->artnode = createNode(protosACN);
+
     InitOuts();
-
-
     initSPI();
-    do{
-       res = initMimas();
-      if(res!=0) sleep(3);
+
+    do
+    {
+        res = initMimas();
+        if(res!=0) sleep(1);
     }while(res!=0);
     mimas_all_black(&outs);
+    usleep(100000);
+    pthread_t pwm_tst_th;
+    pthread_create(&pwm_tst_th,NULL,pmwTest,NULL);
+    printf("Started PWM Test thread\n");
+
     //getInterfaces();
     //getInterfaces();
     socketStart(anetp->artnode, ARTNET_PORT);
@@ -1255,17 +1311,6 @@ int main(void)
     art_set_node(anetp->artnode);
     anetp->artnode->intLimit = 50;
     SmReset(anetp->artnode,eResetInit);
-
-    sleep(1);
-    pwm_per = 59999;
-    pwm_c[0] = 0x1;
-    pwm_v[0] = 2399;
-    int div = 39;
-    mimas_store_pwm_div(3, div);
-    mimas_store_pwm_period(3, pwm_per);
-    mimas_store_pwm_chCntrol(3, 0,pwm_c,1);
-    mimas_store_pwm_val(3, 0,pwm_v,1);
-    mimas_store_pwm_gCntrol(3, 1);
 
     pthread_create(&anetp->artnode->con_tid, NULL, consumer,(void*)anetp);
     rc = pthread_setname_np(anetp->artnode->con_tid, "ArtNetCons\0");
@@ -1283,26 +1328,6 @@ int main(void)
     pthread_t time_one_sec;
     pthread_create(&time_one_sec,NULL,one_sec,(void*)anetp);
 
-    int dir = 25;
-
-
-    do
-    {
-         usleep(62500);
-         pwm_v[0]+=dir;
-         if(pwm_v[0]>2300)
-         {
-            dir = -12;
-         }
-         else
-         {
-
-            if(pwm_v[0]<600)
-                dir = 12;
-         }
-         upd_pwm|=1;
-    }while(1);
-
     printf("Starting Web Server...\n");
     while(1)
     {
@@ -1313,6 +1338,8 @@ int main(void)
     return(0);
 }
 /*
+    in_addr_t sec_ip;
+    struct ifaddrs ipres;
     sock_sec = socket_init(NULL);
     if(sock_sec>-1)
     {
@@ -1321,3 +1348,48 @@ int main(void)
         rc = sock_bind(sock_sec, "wlan0",&sec_ip, ARTNET_PORT);
     }
 */
+
+void pmwTest()
+{
+    int dir[8];
+    upd_pwm=0;
+    pwm_per = 59999;
+    int i;
+    for(i=0; i < 8; i++)
+    {
+        pwm_v[i] =  (100 * i) ;
+        pwm_v[i] %= 5100;
+        pwm_v[i] += 1800;
+        pwm_c[i] = 1;
+        dir[i] = 10;
+    }
+
+    int div = 39;
+    mimas_store_pwm_div(PWM_GRP_ALL, div);
+    mimas_store_pwm_period(PWM_GRP_ALL, pwm_per);
+    mimas_store_pwm_chCntrol(PWM_GRP_ALL, 0,pwm_c,8);
+    //mimas_store_pwm_val(PWM_GRP_ALL, 0,pwm_v,8);
+    mimas_store_pwm_gCntrol(PWM_GRP_ALL, 1);
+    upd_pwm|=2;
+    sleep(2);
+    do
+    {
+        for(i=0;i<8;i++)
+        {
+            pwm_v[i]+=dir[i];
+            if(pwm_v[i]>6900)
+            {
+                dir[i] = -10;
+            }
+            else
+            {
+                if(pwm_v[i]<1800)
+                {
+                    dir[i] = 10;
+                }
+            }
+         }
+     upd_pwm|=1;
+     usleep(20000ul);
+    }while(1);
+}

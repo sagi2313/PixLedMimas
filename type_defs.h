@@ -44,7 +44,7 @@
 #endif
 
 
-#define     GLOBAL_OUTPUTS_MAX 16
+#define     GLOBAL_OUTPUTS_MAX 24
 #define     UNI_PER_OUT 5
 
 #define NODE_VERSION ((uint16_t)0x0001)
@@ -258,9 +258,6 @@ typedef struct
     struct sockaddr_in  sender;
     any_prot_pack_t     pl; //payload
 }peer_pack_t   __attribute__ ((aligned(64)));
-
-
-#define EV_Q_DEPTH  8192
 
 typedef enum
 {

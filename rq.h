@@ -16,6 +16,8 @@
 #define     RQ_DEPTH    (2048u)
 #endif
 
+#define EV_Q_DEPTH  8192
+
 typedef enum{
     no_msg_e      = -1,
     def_msg_e     = 0,

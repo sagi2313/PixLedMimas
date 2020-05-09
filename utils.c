@@ -791,9 +791,11 @@ void mimas_all_black(out_def_t* outs)
     for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
     {
         memset(outs[i].mimaPack, 0, sizeof(mimaspack_t));
+        if( MIMAS_STREAM_BM & (BIT32(i)) ){
         mimas_store_packet(i,outs[i].mimaPack, ( outs[i].mappedLen));
+        }
     }
-    mimas_refresh_start_stream(0xff,0);
+    mimas_refresh_start_stream(MIMAS_STREAM_BM,0);
 }
 
 mimas_state_t mimas_get_state(void)
@@ -821,7 +823,16 @@ int initMimas(void)
     bcm2835_gpio_fsel(MIMAS_SYS_RDY, BCM2835_GPIO_FSEL_INPT);
     bcm2835_gpio_fsel(MIMAS_CLK_RDY, BCM2835_GPIO_FSEL_INPT);
     bcm2835_gpio_fsel(MIMAS_IDLE, BCM2835_GPIO_FSEL_INPT);
-    MIMAS_RESET
+   // MIMAS_RESET
+
+    bcm2835_gpio_set(MIMAS_RST);
+    //bcm2835_delayMicroseconds(10000ull);
+    usleep(10000ul);
+    bcm2835_gpio_clr(MIMAS_RST);
+    //bcm2835_delayMicroseconds(25000ull);
+    usleep(30000ul);
+    bcm2835_gpio_set(MIMAS_RST);
+    usleep(2000ul);
 
     do
     {

@@ -12,6 +12,8 @@
  */
 
 #include <stdint-gcc.h>
+
+#include <time.h>
 //#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,14 +28,17 @@
 #include <bcm2835.h>
 #include <errno.h>
 #define DATABYTES (3 * 750)
-
+#include "mimas_cmd_defs.h"
+#include "mimas_cfg.h"
+#include <byteswap.h>
 static int fd = -1;
 int bits=8;
 //uint8_t mimas[8][DATABYTES + 4];
 uint8_t mimas_pwm[20];
-struct spi_ioc_transfer tr[9];
+struct spi_ioc_transfer tr[13];
 struct spi_ioc_transfer tr_pwm;
 static uint8_t start_stream_header[4];
+
 
 static void pabort(const char *s)
 {
@@ -77,11 +82,11 @@ static void print_usage(const char *prog)
 
 int mimas_send_packet(int chan, uint8_t* data, int len)
 {
-    if(chan>7)return(-3);
-
+return(-5); // obsolete, not supported
     if(fd == -1)return(-1);
+    if(chan>7)return(-3);
     int ret;
-    data[0] = 0x08;
+    data[0] = STREAM_PKT_SEND;
     data[1] = 1<<chan;
     data[2] = len/256;
     data[3] = len%256;
@@ -107,19 +112,32 @@ int mimas_send_packet(int chan, uint8_t* data, int len)
 /*prepare and save data for messages to be sent to mimas in local buffer 'tr */
 int mimas_store_packet(int chan, uint8_t* data, int len)
 {
-    if(chan>7)return(-3);
 
     if(fd == -1)return(-1);
+    if(chan > (MIMAS_STREAM_OUT_CNT-1))return(-3);
     int ret;
-    data[0] = 0x08;
-    data[1] = 1<<chan;
-    data[2] = len/256;
-    data[3] = len%256;
+    uint16_t ch_bm =  1 << chan;
+    data[0] = STREAM_PKT_SEND;
+
+    data[1]= (ch_bm & 0xFF);
+    //data[2]= ((ch_bm >> 8) <<4) | (len >> 8);
+    data[2]= ((ch_bm >> 4) & 0xF0) | (len >> 8);
+    data[3]= len & 0xFF;
+
     tr[chan].tx_buf = (unsigned long)(void*)data;
     tr[chan].len =4u + len;
     return(0);
 }
 
+/*
+pwm API "mimas_store_pwm_val":
+Sets pwm values
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    chan is the channel select, and it works as channel id. Valid is 0 through 7.
+    val is a pointer to array of 16bit values to be assigned to channels starting from "chan" up to chan+cnt
+    cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
+*/
 
 int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
 {
@@ -128,7 +146,12 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
     if((cnt ==0)||(cnt>8)) return(-4);
     if(fd == -1)return(-1);
     int i, ret;
-    mimas_pwm[0] = 0x41;
+    //mimas_cmd_hdr_t* hdr = (mimas_cmd_hdr_t*)(&mimas_pwm[0]);
+    //hdr->pwm.opCode = PWM_VAL_ST;
+    //hdr->pwm.chan = chan;
+    //hdr->pwm.group = grp;
+    //hdr->pwm.cnt = cnt;
+    mimas_pwm[0] = PWM_VAL_ST;
     mimas_pwm[1] = chan;
     mimas_pwm[2] = grp;
     mimas_pwm[3] = cnt;
@@ -155,11 +178,18 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
     return(0);
 }
 
+/*
+pwm API "mimas_store_pwm_period":
+Sets pwm period for a group of pwms
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    val is a 16bit value to be assigned to groups pwm period
+*/
 int mimas_store_pwm_period(uint8_t grp, uint16_t val)
 {
     if(fd == -1)return(-1);
     if(grp>3)return(-13);
-    mimas_pwm[0] = 0x21;
+    mimas_pwm[0] = PWM_PER_ST;
     mimas_pwm[1] = 0;
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
@@ -175,12 +205,18 @@ int mimas_store_pwm_period(uint8_t grp, uint16_t val)
     return(0);
 }
 
-
+/*
+pwm API "mimas_store_pwm_div":
+Sets pwm frequency divider for a group of pwms
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    val is a 8bit value to be assigned to groups pwm frequency divider
+*/
 int mimas_store_pwm_div(uint8_t grp, uint8_t val)
 {
     if(fd == -1)return(-1);
     if(grp>3)return(-13);
-    mimas_pwm[0] = 0x22;
+    mimas_pwm[0] = PWM_DIV_ST;
     mimas_pwm[1] = 0;
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
@@ -192,30 +228,41 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
         pabort("can't send spi message");
         return (-5);
     }
-
     return(0);
 }
 
+/*
+pwm API "mimas_store_pwm_chCntrol":
+Sets pwm enable and invert
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    chan is the channel select, and it works as channel id. Valid is 0 through 7.
+    enabled is a pointer to array of 8bit values to be assigned to channels starting from "chan" up to chan+cnt.
+    in each byte bit0 controls enable flag and bit1 controls invert. Bit0  = 1 -> enable, Bit0 = 1 -> invert
+    cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
+*/
 int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt)
 {
     if(chan>7)return(-3);
     if(grp>3)return(-13);
     if((cnt ==0)||(cnt>8)) return(-4);
     if(fd == -1)return(-1);
-    int i, ret;
-    mimas_pwm[0] = 0x40;
+    int i, ret, j;
+    mimas_pwm[0] = PWM_CH_CTRL_ST;
     mimas_pwm[1] = chan;
     mimas_pwm[2] = grp;
     mimas_pwm[3] = cnt;
     uint8_t* p = &mimas_pwm[4];
+    j = 0;
     for(i=chan;i<cnt;i++)
     {
         *p = (*enabled) & 3;
         p++;
         enabled++;
+        j++;
         if(i>7)break;
     }
-    tr_pwm.len =4u + i;
+    tr_pwm.len =4u + j;
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     if (ret < 1)
     {
@@ -225,11 +272,17 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
     return(0);
 }
 
-int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
+/*
+pwm API "mimas_store_pwm_gCntrol":
+Sets pwm group enable
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    enabled controls enable flag for selected groups
+*/int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
 {
     if(fd == -1)return(-1);
     if(grp > 3)return(-13);
-    mimas_pwm[0] = 0x20;
+    mimas_pwm[0] = PWM_G_CTRL_ST;
     mimas_pwm[1] = 0;
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
@@ -244,16 +297,17 @@ int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
     return(0);
 }
 
-int mimas_start_stream(uint8_t start_bm, uint8_t proto_bm)
+int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
 {
     if(start_bm == 0 ) return(-3);
-
+    if(start_bm  > MIMAS_STREAM_BM) return(-4);
     if(fd == -1)return(-1);
 
     int ret;
-    start_stream_header[1]= start_bm;
-    start_stream_header[3]= proto_bm;
-   // printf("MIMAS start %X\n", start_bm);
+    start_stream_header[1]= (start_bm & 0xFF);
+    start_stream_header[2]= ((start_bm >> 4) & 0xF0) | (proto_bm >> 8);
+    start_stream_header[3]= proto_bm & 0xFF;
+    //printf("MIMAS start %X\n", start_bm);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[8]);
     if (ret < 1){
     pabort("can't send spi message");
@@ -263,21 +317,22 @@ int mimas_start_stream(uint8_t start_bm, uint8_t proto_bm)
     return(0);
 }
 
-#include <time.h>
-int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
+int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
 {
+    if(fd == -1)return(-1);
     int i, ret;
     //struct timespec ts[4];
     //clock_gettime(CLOCK_REALTIME, &ts[0]);
     if(start_bm == 0 ) return(-3);
+    start_bm &= MIMAS_STREAM_BM;
+    proto_bm &= MIMAS_STREAM_BM;
 
-    if(fd == -1)return(-1);
-    uint8_t temp_bm=0;
+    uint16_t temp_bm=0;
     uint8_t *ch;
 
-    for(i=0;i<8;i++)
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
-        if((start_bm & BIT8(i))==0)continue;
+        if((start_bm & BIT32(i))==0)continue;
         if(tr[i].len>0)
         {
             ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[i]);
@@ -287,8 +342,10 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
                 errno =0;
             }
             else{
-            ch = (uint8_t*)(tr[i].tx_buf);
-            temp_bm|=ch[1];
+            //ch = (uint8_t*)(tr[i].tx_buf);
+            //temp_bm|=ch[1];
+            //temp_bm|=(ch[2] & 0xF0) << 8;
+            temp_bm|=(uint16_t)BIT32(i);
             }
         }
         else{
@@ -307,16 +364,18 @@ int mimas_refresh_start_stream(uint8_t start_bm, uint8_t proto_bm)
             return(-2);
         }
     }
-    start_stream_header[1]= temp_bm/*start_bm*/; /// use the  value that probably wont crash mimas
-    start_stream_header[2]= proto_bm;
+    start_stream_header[1]= temp_bm  & 0xFF; /// use the  value that probably wont crash mimas
+    start_stream_header[2]= ((temp_bm >> 4) & 0xF0);
+    start_stream_header[2]|= (proto_bm>> 8);
+    start_stream_header[3] = proto_bm & 0xFF;
    // printf("MIMAS start %X\n", start_bm);
-    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[8]);
+    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);
     if (ret < 1)
     {
         pabort("can't send spi message");
         return (-3);
     }
-    for(i=0;i<8;i++)
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         if(tr[i].len>0)tr[i].len = 0u;
     }
@@ -407,6 +466,8 @@ int spi_main(int argc, char *argv[])
 */
 int initSPI(void)
 {
+delay = 1;
+uint8_t cs_change = 0;
 int i, ret;
     fd = -1;
 	fd = open(device, O_RDWR);
@@ -444,17 +505,22 @@ int i, ret;
 	//printf("sending %u bytes(%x, %x)\n",DATABYTES + 4, mimas[2], mimas[3]);
 
 	memset(tr,0,sizeof(struct spi_ioc_transfer));
-    tr[8].tx_buf = (unsigned long)(void*)&start_stream_header[0];
-	tr[8].rx_buf = (unsigned long)(void*)NULL;
-	tr[8].len = 4;
-	tr[8].delay_usecs = 0;
-	tr[8].speed_hz = speed;
-	tr[8].bits_per_word = 8;
-	start_stream_header[0] = 0x80;
+
+		//*(uint32_t*)&start_stream_header[0] = STREAM_START;
+	start_stream_header[0] = STREAM_START;
 	start_stream_header[1] = 0;
 	start_stream_header[2] = 0;
 	start_stream_header[3] = 0;
-	for(i=0;i<8;i++)
+
+    tr[12].tx_buf = (unsigned long)(void*)&start_stream_header[0];
+	tr[12].rx_buf = (unsigned long)(void*)NULL;
+	tr[12].len = 4;
+	tr[12].delay_usecs = delay;
+	tr[12].speed_hz = speed;
+	tr[12].bits_per_word = 8;
+	tr[12].cs_change = cs_change;
+
+	for(i=0;i<12;i++)
 	{
 	  tr[i].tx_buf = (unsigned long)(void*)NULL;
 	  tr[i].rx_buf = (unsigned long)(void*)NULL;
@@ -462,6 +528,7 @@ int i, ret;
 	  tr[i].delay_usecs = delay;
 	  tr[i].speed_hz = speed;
 	  tr[i].bits_per_word = 8;
+	  tr[i].cs_change = cs_change;
 	}
     memset(&tr_pwm,0,sizeof(tr_pwm));
     memset(mimas_pwm,0,sizeof(mimas_pwm));
@@ -471,7 +538,8 @@ int i, ret;
     tr_pwm.delay_usecs = delay;
     tr_pwm.speed_hz = speed;
     tr_pwm.bits_per_word = 8;
-
+    tr_pwm.cs_change = cs_change;
+    printf("Spi init for %d stream devices, mask is %X\n", MIMAS_STREAM_OUT_CNT, MIMAS_STREAM_BM);
 
 
 return(0);
