@@ -224,12 +224,12 @@ typedef struct
     char            userName[16];
     char            longName[64];
     out_def_t       *outs[GLOBAL_OUTPUTS_MAX];
-    uint32_t all;
-    uint32_t miss;
-    uint32_t packetsCnt;
-    float       fps;
-    uint32_t    frames;
-    uint32_t    barr[8];
+    uint32_t        all;
+    uint32_t        miss;
+    uint32_t        packetsCnt;
+    float           fps;
+    uint32_t        frames;
+    uint32_t        barr[8];
     struct timespec last_rx;
     struct timespec last_pac_proc;
     struct timespec last_mimas_ref;

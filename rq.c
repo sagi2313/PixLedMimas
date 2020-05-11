@@ -87,7 +87,7 @@ int getCopyMsg(fl_head_t* hd, peer_pack_t* pack)
 
     return (0);
 }
-
+/* reserve 1 slot in PO without sending message */
 void msgWritten(fl_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);
@@ -96,6 +96,8 @@ void msgWritten(fl_head_t* hd)
     hd->head = ((++hd->head) & IDXMASK);
     hd->headStep++;
 }
+
+/* reserve cnt slots in PO without sending messages */
 void msgWrittenMulti(fl_head_t* hd, int cnt)
 {
     pthread_spin_lock(&hd->lock);
@@ -104,6 +106,10 @@ void msgWrittenMulti(fl_head_t* hd, int cnt)
     hd->head = ((hd->head + cnt) & IDXMASK);
     hd->headStep+=cnt;
 }
+
+/* rezerveMsgMulti:
+    check how many slots up to cnt can are free to reserve in PO without sending messages, and return array of pointers to **p
+*/
 int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
 {
     int r=0;
@@ -112,9 +118,7 @@ int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
     cnt ++;
     for(r=1;r<cnt;r++)
     {
-
         p[r-1] = &hd->rq[ ((hd->head + r) &  IDXMASK)];
-
     }
     return(cnt-1);
 }

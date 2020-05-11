@@ -13,7 +13,7 @@
 #ifdef      LL_BUFFER
 #define     RQ_DEPTH    (8u * (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))
 #else
-#define     RQ_DEPTH    (2048u)
+#define     RQ_DEPTH    (512u)
 #endif
 
 #define EV_Q_DEPTH  8192

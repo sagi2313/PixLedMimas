@@ -141,15 +141,77 @@ void setHandler(void (*handler)(int,siginfo_t *,void *))
 }
 
 
+void prnDev(int idx)
+{
+    int i;
+    if(idx!=-1)
+    {
+        switch(devList[idx].dev_com.dev_type)
+        {
+            case unused_dev:
+            {
+                break;
+            }
+            case ws_pix_dev:
+            {
+                    if(devList[idx].dev_com.start_address == 0xFFFF)
+                    {
+                        printf("Address %u assigned automatically for device %d\n", devList[idx].pix_devs[0]->com.start_address, idx);
+                        devList[idx].dev_com.start_address = devList[idx].pix_devs[0]->com.start_address;
+                    }
+                    printf("Dev %d pixelCount %u, uniCount  %u subDevices %u startAddr %u, endAddr %u\n", \
+                    idx, devList[idx].pixel_count, devList[idx].uni_count, devList[idx].sub_dev_cnt, devList[idx].dev_com.start_address, \
+                    devList[idx].dev_com.end_address);
+                    for(i=0;i< devList[idx].sub_dev_cnt;i++)
+                    {
+                        ws_pix_vdev_t* pxd = devList[idx].pix_devs[i];
+                        printf("subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
+                        i,pxd->com.start_address, pxd->com.end_address, pxd->pixel_count, pxd->pix_per_uni, pxd->out_start_id);
+
+                    }
+                break;
+            }
+            case dmx_out_dev:
+            {
+                break;
+            }
+            case pwm_dev:
+            {
+                break;
+            }
+            default:break;
+        }
+
+    }
+}
+
 void make_a_dev()
 {
-    ws_pix_vdev_t   vd;
-    vd.pixel_count = 6500;
-    vd.pix_per_uni = 170;
-    vd.col_map = grb_map_e;
-    vd.start_address = 0;
-    build_dev_ws(&vd);
+    int res, i;
+    pwm_vdev_t pdev;
+    pdev.com.start_address = 0xFFFF;
+    pdev.com.start_offset = 0;
+    pdev.ch_count = 10;
+    res = build_dev_pwm(&pdev);
 
+
+    pdev.ch_count = 2;
+    build_dev_pwm(&pdev);
+    build_dev_pwm(&pdev);
+    build_dev_pwm(&pdev);
+
+    ws_pix_vdev_t   vd;
+    vd.pixel_count = 1500;
+    vd.pix_per_uni = 150;
+    vd.col_map = grb_map_e;
+    vd.com.start_address = 17;
+    res =build_dev_ws(&vd);
+    prnDev(res);
+
+
+    vd.com.start_address = 0xFFFF;
+    res = build_dev_ws(&vd);
+    prnDev(res);
 }
 
 void InitOuts(void)
@@ -177,8 +239,16 @@ void InitOuts(void)
             outs[i].wrPt[j] = pt;
             pt+=outs[i].uniLenLimit[j];
         }
-        if(i < (MIMAS_STREAM_OUT_CNT  * MIMAS_DEV_CNT))outputs_dev_map[i] = dev_pixels;
+        if(i < (MIMAS_STREAM_OUT_CNT  * MIMAS_DEV_CNT))
+        {
+            outputs_dev_map[i] = dev_pixels;
+        }
+        else
+        {
+            outputs_dev_map[i] = dev_pwm;
+        }
     }
+    outputs_dev_map[8] = dev_pwm;
 }
 
 
@@ -316,401 +386,316 @@ void* consumer(void* d)
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &timers[idle_e]);
     t1 = clock();
 
-    //art_resp_e ArtNetDecode(const peer_pack_t* peerPack)
     while(1)
     {
-    /*
-        if(timeloop == 100)
-        {
-            double d = (double)timesum;
-            double m = (double)timesum_mimas;
-            d = d/(double)(CLOCKS_PER_SEC * 100l);
-            m = m/(double)(CLOCKS_PER_SEC * 100l);
-            //printf("pack2pack avg = %u\n", (uint32_t)timesum);
-            printf("pack2pack avg = %.4f, mimas = %.5f\n", d, m);
-            timesum = 0ul;
-            timesum_mimas=0ul;
-            timeloop =0u;
-        }*/
-        /*
-        if(proc_cnt>=32000)
-        {
-            double d = (double)timesum_proc;
-            d = d/(double)(CLOCKS_PER_SEC * (long)32);
-            printf("proc avg = %.5f msec\n", d);
-            proc_cnt=0;
-            timesum_proc=0;
-        }*/
-    /*
-        while (clock_gettime(CLOCK_REALTIME, &ts) == -1)
-               perror("clock_gettime");
-        //rc =sem_wait(&UQ.sem);
-        ts.tv_sec+=1;
-        cn = msgRxBLTimed(pb,&ts, &cause);
-        //cn = msgRxBL(pb);
-        if(cn == NULL)
-        {
-            printf("Error, consumer received NULL msg: cause = %d\n", cause);
-            do{
-            while (clock_gettime(CLOCK_REALTIME, &ts) == -1)
-               perror("clock_gettime");
-               ts.tv_sec+=10;
-                cn = msgRxBLTimed(pb,&ts, &cause);
-                printf("still waiting...cause = %d\n", cause);
-                //cn = msgRxBL(pb);
-            }while(cn==NULL);
-            //continue;
-        }
-        */
-
         trms[0]->msg_cnt = popcnt++;
         do
         {
-            usleep(10);
-            if(upd_pwm & 1)
-            {
-                //pwmv = 3* pwm_v[0];
-                //for(i=0;i<8;i++){
-                //mimas_store_pwm_val(PWM_GRP_ALL, i, &pwm_v[i]/*&pwmv*/,1);
-                mimas_store_pwm_val(PWM_GRP_ALL, 0, pwm_v/*&pwmv*/,8);
-                //}
-                upd_pwm &=(~1);
-            }
-            if(upd_pwm & 2)
-            {
-                mimas_store_pwm_chCntrol(PWM_GRP_ALL, 0, &pwm_c[0],8);
-                upd_pwm&=(~2);
-            }
+            usleep(2);
             ret = getCopyMsg(&pb->rq_head, p);
-
-            //p = getMsg(&pb->rq_head);
-        }while(/*p == NULL*/ret);
+        }while(ret);
 
         clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
         post_msg(&ev_pb->rq_head, trms[0],sizeof(trace_msg_t));
-        //p1 = clock();
-       /* switch(cn->item.hdr.msgtype)
+        ap =  &p->pl.art; //&pp->pl.art;
+        art_res = ArtNetDecode(ap);
+        //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full);
+        switch(ap->ArtDmxOut.head.OpCode.OpCode)
         {
-            case art_rq_msg_e:
+            case 	OpPoll:
             {
-                idx = cn->item.pl.itemId;
+                printf("Got POLL from %s\n",inet_ntoa(p->sender.sin_addr));
+                make_artnet_resp(p);
+                //ap->ArtDmxOut.head.id[0] = '\0';
+                //msgRead(&pb->rq_head);
+                //msgRelease(pb,cn); // return this node to unused pile
+                continue;
                 break;
             }
-            //case sys_msg_e:
-            //case def_msg_e:
-            default:
-            msgRelease(pb, cn);
-            printf("Error unknown msg type in consumer, dropping\n");
-            continue;
-        }*/
-        /*
-        rc = postGetPileCount(pb);
-        if(rc <0)
-        {
-            perror("SemCnt err");
-        }
-        else
-        {
-            mark = rc;
-            if(mark<lowMark)
+            case	OpPollReply:
+            case	OpDiagData:
+            case	OpCommand:
+            case	OpNzs:
+            case	OpAddress:
+            case	OpInput:
+            case	OpTodReq:
+            case	OpTodData:
+            case	OpTodCtrl:
+            case	OpRdm:
+            case	OpRdmSub:
+            case	OpVidSetup:
+            case	OpVidPalette:
+            case	OpVidData:
+            case	OpOther:
             {
-                lowMark = mark;
-                printf("LoMark %d\n", lowMark);
+                //putNode(&RQ, cn);
+                //ap->ArtDmxOut.head.id[0] = '\0';
+                printf("ArtErr unknown OpCode %x\n", ap->ArtDmxOut.head.OpCode.OpCode);
+                //msgRelease(pb,cn);
+                //msgRead(&pb->rq_head);
+                continue; // get next Packet
+                break;
             }
-            else
+            case    OpSync:
             {
-                attention = 0;
+                //putNode(&RQ, cn);
+                //msgRelease(pb,cn);
+                //msgRead(&pb->rq_head);
+                switch(sm->state)
+                {
+                    case	out_of_sync_e:
+                    case    wait_sync_e:
+                    {
+                        sm->hasSync = 1;
+                        sm->sync_missing_cnt = 0;
+                        printf("Using Sync packets ...\n");
+                        continue; // get next Packet
+                        break;
+                    }
+                    case working_e:
+                    {
+                        if(sm->hasSync == 0)
+                        {
+                            printf("detected sync packet while working. Resetting SM ...\n");
+                            SmReset(me, eResetArtOther);
+                            continue; // get next Packet
+                        }
+                        sm->sync_missing_cnt = 0;
+                        if(sm->syncState == no_sync_yet)
+                        {
+                            sm->syncState = sync_ok;
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                        break;
+                    }
+                    default:
+                    {
+                        printf("Sync received in state %d\n", sm->state);
+                        if(sm->hasSync == 0)
+                        {
+                            printf("detected sync packet in wrong state. Resetting SM ...\n");
+                            SmReset(me, eResetArtOther);
+                            continue; // get next Packet
+                        }
+                        sm->syncState = sync_ok;
+                        sm->sync_missing_cnt = 0;
+                        continue; // get next Packet
+                    }
+                }
+                break;
             }
-            if(mark<(RQ_DEPTH / 4))
+            case OpDmx:
             {
-                attention = 1;
-            }
-        }
-        if(attention) printf("Low on Q pile, %u\n", lowMark);
-*/
-        //getFree(&UQ, cn, idx);
-        //if(cn!=NULL)        {
-
-            //pp = &rq_data[idx];
-            ap =  &p->pl.art; //&pp->pl.art;
-            art_res = ArtNetDecode(ap);
-            //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full);
-            switch(ap->ArtDmxOut.head.OpCode.OpCode)
-            {
-                case 	OpPoll:
-				{
-                    printf("Got POLL from %s\n",inet_ntoa(p->sender.sin_addr));
-                    make_artnet_resp(p);
-					//ap->ArtDmxOut.head.id[0] = '\0';
-					//msgRead(&pb->rq_head);
-					//msgRelease(pb,cn); // return this node to unused pile
-                    continue;
-					break;
-				}
-				case	OpPollReply:
-				case	OpDiagData:
-				case	OpCommand:
-				case	OpNzs:
-				case	OpAddress:
-				case	OpInput:
-				case	OpTodReq:
-				case	OpTodData:
-				case	OpTodCtrl:
-				case	OpRdm:
-				case	OpRdmSub:
-				case	OpVidSetup:
-				case	OpVidPalette:
-				case	OpVidData:
-				case	OpOther:
-				{
-                    //putNode(&RQ, cn);
-                    //ap->ArtDmxOut.head.id[0] = '\0';
-					printf("ArtErr unknown OpCode %x\n", ap->ArtDmxOut.head.OpCode.OpCode);
-					//msgRelease(pb,cn);
-					//msgRead(&pb->rq_head);
-					continue; // get next Packet
-					break;
-				}
-				case    OpSync:
-				{
+                clock_gettime(CLOCK_REALTIME, &trms[1]->ts);
+                me->last_pac_proc = trms[1]->ts;
+                trms[1]->art_addr = ap->ArtDmxOut.a_net.SubUni.subuni_full;
+                post_msg(&ev_pb->rq_head, trms[1],sizeof(trace_msg_t));
+                // check if incoming universe falls in the range we handle
+                int devIdx = findVDevAtAddr(ap->ArtDmxOut.a_net.SubUni.subuni_full);
+                if(devIdx>-1)
+                {
+                   // prnDev(devIdx);
+                }
+                if((ap->ArtDmxOut.a_net.SubUni.subuni_full < (sm->startNet & 0xFF)) || \
+                    (ap->ArtDmxOut.a_net.SubUni.subuni_full > (sm->endNet & 0xFF)))
+                {
                     //putNode(&RQ, cn);
                     //msgRelease(pb,cn);
                     //msgRead(&pb->rq_head);
-                    switch(sm->state)
-					{
-                        case	out_of_sync_e:
-                        case    wait_sync_e:
-                        {
-                            sm->hasSync = 1;
-                            sm->sync_missing_cnt = 0;
-                            printf("Using Sync packets ...\n");
-                            continue; // get next Packet
-                            break;
-                        }
-                        case working_e:
-                        {
-                            if(sm->hasSync == 0)
-                            {
-                                printf("detected sync packet while working. Resetting SM ...\n");
-                                SmReset(me, eResetArtOther);
-                                continue; // get next Packet
-                            }
-                            sm->sync_missing_cnt = 0;
-                            if(sm->syncState == no_sync_yet)
-                            {
-                                sm->syncState = sync_ok;
-                            }
-                            else
-                            {
-                                continue;
-                            }
-                            break;
-                        }
-                        default:
-                        {
-                            printf("Sync received in state %d\n", sm->state);
-                            if(sm->hasSync == 0)
-                            {
-                                printf("detected sync packet in wrong state. Resetting SM ...\n");
-                                SmReset(me, eResetArtOther);
-                                continue; // get next Packet
-                            }
-                            sm->syncState = sync_ok;
-                            sm->sync_missing_cnt = 0;
-                            continue; // get next Packet
-                        }
-                    }
+                    continue; // dont care about this universe, get next Packet
                     break;
-				}
-				case OpDmx:
-				{
-                    clock_gettime(CLOCK_REALTIME, &trms[1]->ts);
-                    me->last_pac_proc = trms[1]->ts;
-                    trms[1]->art_addr = ap->ArtDmxOut.a_net.SubUni.subuni_full;
-                    post_msg(&ev_pb->rq_head, trms[1],sizeof(trace_msg_t));
-                    // check if incoming universe falls in the range we handle
-                    if((ap->ArtDmxOut.a_net.SubUni.subuni_full < (sm->startNet & 0xFF)) || \
-                        (ap->ArtDmxOut.a_net.SubUni.subuni_full > (sm->endNet & 0xFF)))
+                }
+                // adjust min_uni if required
+                runi = ap->ArtDmxOut.a_net.SubUni.subuni_full - (sm->startNet &0xFF);
+                if(sm->min_uni > ap->ArtDmxOut.a_net.SubUni.subuni_full)
+                {
+                    sm->min_uni = ap->ArtDmxOut.a_net.SubUni.subuni_full;
+                }
+                switch(sm->state)
+                {
+                    case	out_of_sync_e:
                     {
-                        //putNode(&RQ, cn);
-                        //msgRelease(pb,cn);
-                        //msgRead(&pb->rq_head);
-                        continue; // dont care about this universe, get next Packet
-                        break;
-                    }
-                    // adjust min_uni if required
-                    runi = ap->ArtDmxOut.a_net.SubUni.subuni_full - (sm->startNet &0xFF);
-                    if(sm->min_uni > ap->ArtDmxOut.a_net.SubUni.subuni_full)
-					{
-						sm->min_uni = ap->ArtDmxOut.a_net.SubUni.subuni_full;
-					}
-					switch(sm->state)
-					{
-                        case	out_of_sync_e:
+                        //if we got a universe for second time, and its the minimum we probably have them all, so we prepare for next state
+                        if( (sm->expected_full_map & BIT64(runi)) && \
+                            (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) )
                         {
-                            //if we got a universe for second time, and its the minimum we probably have them all, so we prepare for next state
-                            if( (sm->expected_full_map & BIT64(runi)) && \
-                                (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) )
+                            for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
                             {
-                                for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+                                outs[i].dlen = 0;
+                                outs[i].fullMap = sm->expected_full_map & (BIT64(UNI_PER_OUT)  - 1u);
+                                sm->expected_full_map>>=UNI_PER_OUT;
+                            }
+                            start_bm = 0;
+                            sm->expected_full_map = 0llu;
+                            sm->state = wait_sync_e;
+                            printf("Going wait_sync_e\n");
+                            sm->DataOk = 1;
+                            //setSockTimout(me->sockfd,1000);
+                            sm->active_unis = 0;
+                            /*dont break, fall through to wait sync state */
+                        }
+                        else
+                        {
+                            //putNode(&RQ, cn); // return this node to unused pile
+                            //msgRelease(pb,cn);
+                            //msgRead(&pb->rq_head);
+                            sm->expected_full_map|=BIT64(runi);
+                            continue;  // don't process  output, got get packets
+                            break;
+                        }
+                    }
+                    case	wait_sync_e:
+                    {
+                        // if we got minimum known uni for a second time move to working state
+                        if( (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) && (sm->expected_full_map & BIT64(runi)) )
+                        {
+                            sm->state = working_e;
+                            time_t now;
+                            time(&now);
+                            struct tm ts = *localtime(&now);
+                            char tsbuf[80];
+                            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+                            printf("Going working_e, %u active unis at %s\n", sm->active_unis, tsbuf);
+                            sm->curr_map = 0llu;
+                            /*dont return nod yet to pile, it will be used in working state, and returned there.
+                             * also dont break, fall through to working state*/
+                        }
+                        else
+                        {
+                            //putNode(&RQ, cn); // return this node to unused pile
+                            //msgRelease(pb,cn);
+                            //msgRead(&pb->rq_head);
+                            if((sm->expected_full_map & BIT64(runi) )== 0llu)sm->active_unis++;
+                            sm->expected_full_map|=BIT64(runi);
+                            continue;
+                            break;
+                        }
+                    }
+                    case working_e:
+                    {
+                        oSel = runi / UNI_PER_OUT;
+                        sUni = runi % UNI_PER_OUT;
+                        // if Sync packet is not present in stream and we got minimum uni, it must be a new frame, so reset bitmasks, and get fresh data
+                        if(sm->hasSync == 0)
+                        {
+                        /*
+                            if(runi == 0)
+                            {
+                                sm->curr_map = 0llu;
+                                outs[oSel].fillMap = 0;
+                                outs[oSel].dlen = 0;
+                            }
+*/
+                           // printf("currMap %lu runi = %u oSel = %u\n",sm->curr_map, runi, oSel);
+                            outs[oSel].fillMap|=BIT8(sUni);
+                            //mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);  // write mapped pixel data in outbuffer
+                            //msgRead(&pb->rq_head);                          // free up that msg slot, data is now copied in out buffer
+                            if((sm->curr_map & BIT64(runi)))    // if this uni was already mapped in output, it will be overwritten by new packet, from previous 2 lines
+                            {
+                                fl_head_t info;
+                                if(sm->expected_full_map & BIT64(runi))
                                 {
-                                    outs[i].dlen = 0;
-                                    outs[i].fullMap = sm->expected_full_map & (BIT64(UNI_PER_OUT)  - 1u);
-                                    sm->expected_full_map>>=UNI_PER_OUT;
+                                    get_pb_info(&pb->rq_head, &info);
+                                    printf("got a second runi %u. head = %u, tail = %u, cnt = %u, hS = %u, tS = %u\n", runi, info.head, info.tail, info.count, info.headStep, info.tailStep);
                                 }
-                                start_bm = 0;
-                                sm->expected_full_map = 0llu;
-                                sm->state = wait_sync_e;
-                                printf("Going wait_sync_e\n");
-                                sm->DataOk = 1;
-                                //setSockTimout(me->sockfd,1000);
-                                sm->active_unis = 0;
-                                /*dont break, fall through to wait sync state */
+                                else
+                                {
+                                    sm->expected_full_map = 0;
+                                    sm->state = out_of_sync_e;
+                                    start_bm = 0;
+                                    sm->curr_map = 0llu;
+                                    for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+                                    {
+                                        outs[i].dlen = 0;
+                                        outs[i].fillMap = 0;
+                                    }
+                                    //synced = 0;
+                                    continue;
+                                }
                             }
                             else
                             {
-                                //putNode(&RQ, cn); // return this node to unused pile
-                                //msgRelease(pb,cn);
-                                //msgRead(&pb->rq_head);
-                                sm->expected_full_map|=BIT64(runi);
-                                continue;  // don't process  output, got get packets
-                                break;
+                                sm->curr_map|=BIT64(runi);
+                                outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
+                            }
+                            //timesum_proc+=clock()-p1;
+                            //proc_cnt++;
+                        }
+                        else
+                        {
+                            // if this is the first time we receive this universe in this frame do some extras
+                            if(sm->syncState == sync_consumed) sm->syncState = no_sync_yet;
+                            if((sm->curr_map & BIT64(runi)) == 0ul)
+                            {
+                                outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
+                                sm->curr_map|=BIT64(runi);
+                                outs[oSel].fillMap|=BIT8(sUni);
+                            }
+                            else
+                            {
+                                if(++sm->sync_missing_cnt  > (2 * sm->active_unis))
+                                {
+                                    //putNode(&RQ,cn); // done with note, send to unused pile
+                                    //msgRelease(pb,cn);
+                                    //msgRead(&pb->rq_head);
+                                    SmReset(me, eResetFrErr);
+                                }
+                            }
+
+                            //putNode(&RQ,cn); // done with note, send to unused pile
+                            //msgRelease(pb,cn);
+                            //msgRead(&pb->rq_head);
+
+                            //if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
+                        }
+                        if(outputs_dev_map[oSel] == dev_pixels)
+                        {
+                            mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
+                            if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
+                            {
+                                rc = sendOutToMimas(oSel);
+                                if(rc == 0)
+                                {
+                                    start_bm|=BIT32(oSel);
+                                    clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
+                                    post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
+                                }
+                                else
+                                {
+                                    start_bm&=(0x3FF & (~BIT32(oSel)));
+                                    outs[oSel].fillMap = 0;
+                                    printf("Error %d from mimas sending %d output\n",rc,oSel);
+                                }
                             }
                         }
-                        case	wait_sync_e:
-						{
-							// if we got minimum known uni for a second time move to working state
-							if( (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) && (sm->expected_full_map & BIT64(runi)) )
-							{
-								sm->state = working_e;
-								time_t now;
-                                time(&now);
-                                struct tm ts = *localtime(&now);
-                                char tsbuf[80];
-                                strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-								printf("Going working_e, %u active unis at %s\n", sm->active_unis, tsbuf);
-								sm->curr_map = 0llu;
-								/*dont return nod yet to pile, it will be used in working state, and returned there.
-								 * also dont break, fall through to working state*/
-							}
-							else
-							{
-								//putNode(&RQ, cn); // return this node to unused pile
-								//msgRelease(pb,cn);
-								//msgRead(&pb->rq_head);
-								if((sm->expected_full_map & BIT64(runi) )== 0llu)sm->active_unis++;
-								sm->expected_full_map|=BIT64(runi);
-								continue;
-								break;
-							}
-						}
-						case working_e:
-						{
-                            oSel = runi / UNI_PER_OUT;
-                            sUni = runi % UNI_PER_OUT;
-                            // if Sync packet is not present in stream and we got minimum uni, it must be a new frame, so reset bitmasks, and get fresh data
-                            if(sm->hasSync == 0)
+                        else if(outputs_dev_map[oSel] == dev_pwm)
+                        {
+                            for(i=0;i<2;i++)
                             {
-                            /*
-                                if(runi == 0)
-                                {
-                                    sm->curr_map = 0llu;
-                                    outs[oSel].fillMap = 0;
-                                    outs[oSel].dlen = 0;
-                                }
-*/
-                               // printf("currMap %lu runi = %u oSel = %u\n",sm->curr_map, runi, oSel);
-                                outs[oSel].fillMap|=BIT8(sUni);
-                                mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);  // write mapped pixel data in outbuffer
-                                //msgRead(&pb->rq_head);                          // free up that msg slot, data is now copied in out buffer
-                                if((sm->curr_map & BIT64(runi)))    // if this uni was already mapped in output, it will be overwritten by new packet, from previous 2 lines
-                                {
-                                    fl_head_t info;
-                                    if(sm->expected_full_map & BIT64(runi))
-                                    {
-                                        get_pb_info(&pb->rq_head, &info);
-                                        printf("got a second runi %u. head = %u, tail = %u, cnt = %u, hS = %u, tS = %u\n", runi, info.head, info.tail, info.count, info.headStep, info.tailStep);
-                                    }
-                                    else
-                                    {
-                                        sm->expected_full_map = 0;
-                                        sm->state = out_of_sync_e;
-                                        start_bm = 0;
-                                        sm->curr_map = 0llu;
-                                        for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
-                                        {
-                                            outs[i].dlen = 0;
-                                            outs[i].fillMap = 0;
-                                        }
-                                        //synced = 0;
-                                        continue;
-                                    }
-                                }
-                                else
-                                {
-                                    sm->curr_map|=BIT64(runi);
-                                    outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
-                                }
-                                //timesum_proc+=clock()-p1;
-                                //proc_cnt++;
-                            }
-                            else
-                            {
-                                // if this is the first time we receive this universe in this frame do some extras
-                                if(sm->syncState == sync_consumed) sm->syncState = no_sync_yet;
-                                if((sm->curr_map & BIT64(runi)) == 0ul)
-                                {
-                                    outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
-                                    sm->curr_map|=BIT64(runi);
-                                    outs[oSel].fillMap|=BIT8(sUni);
-                                }
-                                else
-                                {
-                                    if(++sm->sync_missing_cnt  > (2 * sm->active_unis))
-                                    {
-                                        //putNode(&RQ,cn); // done with note, send to unused pile
-                                        //msgRelease(pb,cn);
-                                        //msgRead(&pb->rq_head);
-                                        SmReset(me, eResetFrErr);
-                                    }
-                                }
-                                mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
-                                //putNode(&RQ,cn); // done with note, send to unused pile
-                                //msgRelease(pb,cn);
-                                //msgRead(&pb->rq_head);
+                                pwm_v[4 * i] = (ap->ArtDmxOut.dmx[i]);
+                                pwm_v[4 * i]  *= 17;
+                                pwm_v[4 * i] +=2400;
+                               // printf("%s : %u ",i==0?"Pan":"Tilt", pwm_v[4*i]);
 
-                                //if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
                             }
-                            if(outputs_dev_map[oSel] == dev_pixels)
-                            {
-                                if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
-                                {
-                                    rc = sendOutToMimas(oSel);
-                                    if(rc == 0)
-                                    {
-                                        start_bm|=BIT32(oSel);
-                                        clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
-                                        post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
-                                    }
-                                    else
-                                    {
-                                        start_bm&=(0x3FF & (~BIT32(oSel)));
-                                        outs[oSel].fillMap = 0;
-                                        printf("Error %d from mimas sending %d output\n",rc,oSel);
-                                    }
-                                }
-                            }
-                            break; // go process out
-						} // working state inside OpDMX closes
-						break;
-                    } // switch(sm->state) closes
-                break;
-                }   //OpCodeDMX closes
-                default:
-                {
-                    //msgRead(&pb->rq_head);
-                }
-            } // switch OpCode closes
+
+                            //printf("\n");
+                            mimas_store_pwm_val(PWM_GRP_ALL, 0, pwm_v/*&pwmv*/,8);
+                        }
+                        break; // go process out
+                    } // working state inside OpDMX closes
+                    break;
+                } // switch(sm->state) closes
+            break;
+            }   //OpCodeDMX closes
+            default:
+            {
+                //msgRead(&pb->rq_head);
+            }
+        } // switch OpCode closes
 // here starts output Handling
             if(sm->hasSync == 1)
             {
@@ -1235,22 +1220,8 @@ void* producer(void* d)
         }
     }
 }
-/*
-#include "gen_lists.h"
-void testLists(void)
-{
-    volatile int a,b,c;
-    int rc;
-    a = 3;
-    b = 5;
-    c = 122;
-    ln_t h = addItem(NULL,&a);
-    addItem(h, &b);
-    addItem(h, &c);
-    rc = remItem(h, &b);
-}
-*/
 
+/* initialize mainPO and eventQ*/
 int initMessaging(void)
 {
     memset((void*)(ev_q), 0, sizeof(ev_q));
@@ -1357,9 +1328,9 @@ void pmwTest()
     int i;
     for(i=0; i < 8; i++)
     {
-        pwm_v[i] =  (100 * i) ;
-        pwm_v[i] %= 5100;
-        pwm_v[i] += 1800;
+        pwm_v[i] =  (500 * i) ;
+        pwm_v[i] %= 3900;
+        pwm_v[i] += 2400;
         pwm_c[i] = 1;
         dir[i] = 10;
     }
@@ -1373,23 +1344,23 @@ void pmwTest()
     upd_pwm|=2;
     sleep(2);
     do
-    {
+    {/*
         for(i=0;i<8;i++)
         {
             pwm_v[i]+=dir[i];
-            if(pwm_v[i]>6900)
+            if(pwm_v[i]>6300)
             {
-                dir[i] = -10;
+                dir[i] = -100;
             }
             else
             {
-                if(pwm_v[i]<1800)
+                if(pwm_v[i]<2400)
                 {
-                    dir[i] = 10;
+                    dir[i] = 100;
                 }
             }
          }
-     upd_pwm|=1;
-     usleep(20000ul);
+     upd_pwm|=1;*/
+     usleep(60000ul);
     }while(1);
 }
