@@ -149,7 +149,9 @@ typedef struct
 	uint8_t data_txed:1;
 }good_out_s __attribute__((packed));
 
-typedef struct
+typedef union {
+addressing_t raw_addr;
+struct
 {
 	union
 	{
@@ -161,6 +163,7 @@ typedef struct
 		uint8_t subuni_full;
 	}SubUni __attribute__((packed));
 	uint8_t	net:7;
+	};
 }art_net_net_t __attribute__((packed));
 
 
@@ -171,6 +174,14 @@ typedef struct
 }art_net_head_t;
 
 typedef in_addr_t ip4_addr_t;
+
+
+typedef struct
+{
+    art_net_head_t	head;
+    union16_t		version;
+    union16_t		aux;
+}art_net_sync_t;
 
 typedef struct
 {

@@ -5,7 +5,7 @@
 #define unlikely(x)     __builtin_expect((x),0)
 static post_box_t* defPB = NULL;
 
-post_box_t* createPB(uint32_t count, const char* name, void* rqs)
+post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size)
 {
     post_box_t* pb = (post_box_t*)calloc(1, sizeof(post_box_t));
     if(pb == NULL)return(NULL);
@@ -20,8 +20,10 @@ post_box_t* createPB(uint32_t count, const char* name, void* rqs)
     #else
 
     pb->rq_head.count = 0;
-    pb->rq_head.rq = rqs;
+    pb->rq_head.genQ = rqs;
     pb->rq_head.head = (pb->rq_head.head - 1)& (count-1u);
+    pb->rq_head.Q_MSK = (count-1u);
+    pb->rq_head.slot_sz = q_size / count;
     pthread_spin_init( &pb->rq_head.lock,  PTHREAD_PROCESS_PRIVATE );
     #endif
     return(pb);
@@ -43,7 +45,7 @@ int rezerveMsgs(int count, fl_head_t* hd)
     }
     else
     {
-        uint32_t r = RQ_DEPTH - hd->head;
+        uint32_t r = (hd->Q_MSK +1u) - hd->head;
         if(r < count )
         {
             return( MIN( (r + t), count) );
@@ -54,71 +56,77 @@ int rezerveMsgs(int count, fl_head_t* hd)
 peer_pack_t* rezerveMsg( fl_head_t* hd)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
-    if(count > IDXMASK)return(NULL);
-    return (  &hd->rq[ ((hd->head +1) &  IDXMASK)] );
+    if(count > hd->Q_MSK)return(NULL);
+    return (  &hd->genQ[ hd->slot_sz * ((hd->head +1) &  hd->Q_MSK) ] );
 }
+
+/*  get a pointer to next unread msg */
 peer_pack_t* getMsg(fl_head_t* hd)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count <1)return(NULL);
 
-    return (&hd->rq[hd->tail]);
+    return (&hd->genQ[ ( hd->slot_sz * hd->tail )]);
 }
+
+/* mark a msg are "read" and move tail index , decrease count */
 void msgRead(fl_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_sub_fetch(&hd->count, 1, __ATOMIC_RELAXED);
     pthread_spin_unlock(&hd->lock);
-    hd->tail = ((++hd->tail) & IDXMASK);
+    hd->tail = ((++hd->tail) & hd->Q_MSK);
     hd->tailStep++;
 }
 
+/* mark a msg are "read" and move tail index , decrease count , copy msg into buffer "pack"*/
 int getCopyMsg(fl_head_t* hd, peer_pack_t* pack)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count <1)return(-1);
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_sub_fetch(&hd->count, 1, __ATOMIC_RELAXED);
-    *pack = hd->rq[hd->tail];
-    hd->tail = ((++hd->tail) & IDXMASK);
+    *pack = *(peer_pack_t*)&hd->genQ[ ( hd->slot_sz * hd->tail )];
+    hd->tail = ((++hd->tail) & hd->Q_MSK);
     hd->tailStep++;
     pthread_spin_unlock(&hd->lock);
 
 
     return (0);
 }
-/* reserve 1 slot in PO without sending message */
+/* mark 1 slot as written, meaning slot processing is done, msg will be available to receiver */
 void msgWritten(fl_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_add_fetch(&hd->count, 1, __ATOMIC_RELAXED);
     pthread_spin_unlock(&hd->lock);
-    hd->head = ((++hd->head) & IDXMASK);
+    hd->head = ((++hd->head) & hd->Q_MSK);
     hd->headStep++;
 }
 
-/* reserve cnt slots in PO without sending messages */
+/* mark cnt slots as written, meaning slot processing is done, msgs will be available to receiver */
 void msgWrittenMulti(fl_head_t* hd, int cnt)
 {
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_add_fetch(&hd->count, cnt, __ATOMIC_RELAXED);
     pthread_spin_unlock(&hd->lock);
-    hd->head = ((hd->head + cnt) & IDXMASK);
+    hd->head = ((hd->head + cnt) & hd->Q_MSK);
     hd->headStep+=cnt;
 }
 
 /* rezerveMsgMulti:
-    check how many slots up to cnt can are free to reserve in PO without sending messages, and return array of pointers to **p
+    check how many slots up to cnt can are free to reserve in PO
+    without sending messages, and return array of pointers to **p
 */
 int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
 {
     int r=0;
     uint_fast32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
-    if((count + cnt) > IDXMASK)cnt = IDXMASK - count +1;
+    if((count + cnt) > hd->Q_MSK)cnt = hd->Q_MSK - count +1;
     cnt ++;
     for(r=1;r<cnt;r++)
     {
-        p[r-1] = &hd->rq[ ((hd->head + r) &  IDXMASK)];
+        p[r-1] = &hd->genQ[ (hd->slot_sz * ((hd->head + r) &  hd->Q_MSK)) ];
     }
     return(cnt-1);
 }
@@ -126,11 +134,7 @@ int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
 int get_pb_info(fl_head_t* from, fl_head_t* to)
 {
     pthread_spin_lock(&from->lock);
-    to->head = from->head;
-    to->tail = from->tail;
-    to->headStep = from->headStep;
-    to->tailStep = from->tailStep;
-    to->count = from->count;
+    *to = *from;
     pthread_spin_unlock(&from->lock);
 }
 int post_msg(fl_head_t* hd, void* data, int len)
@@ -138,15 +142,15 @@ int post_msg(fl_head_t* hd, void* data, int len)
     do
     {
         pthread_spin_lock(&hd->lock);
-        if(hd->count > EV_Q_MASK)
+        if(hd->count > hd->Q_MSK)
         {
             pthread_spin_unlock(&hd->lock);
             return(-1);
         }
     }while(0);
     hd->head++;
-    hd->head &= EV_Q_MASK;
-    memcpy((void*)(&hd->evq[hd->head]), data, len);
+    hd->head &= hd->Q_MSK;
+    memcpy((void*)(&hd->genQ[ (hd->slot_sz * hd->head)]), data, len);
     hd->count++;
 
     pthread_spin_unlock(&hd->lock);
@@ -163,7 +167,7 @@ int get_taces(fl_head_t* hd, int* indexes, int max_count )
     max_count = cnt;
     while(cnt)
     {
-        pidx[i] = ((hd->tail + i) & EV_Q_MASK);
+        pidx[i] = ((hd->tail + i) & hd->Q_MSK);
         cnt--;
         i++;
     }
@@ -175,7 +179,7 @@ void free_traces(fl_head_t* hd, int count)
     pthread_spin_lock(&hd->lock);
     hd->count -=count;
     hd->tail += count;
-    hd->tail &= EV_Q_MASK;
+    hd->tail &= hd->Q_MSK;
     pthread_spin_unlock(&hd->lock);
 }
 #else

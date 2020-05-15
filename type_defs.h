@@ -27,8 +27,9 @@
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
-
-
+#include <stdint-gcc.h>
+#include <stdint.h>
+#include "mimas_cfg.h"
 //#include "protocolCommon.h"
 
 #ifndef  BIT64
@@ -36,11 +37,15 @@
 #endif
 
 #ifndef  BIT32
-#define BIT32(B)  ( (uint32_t)( ((uint32_t)1ULL)<<((uint32_t)(B)) ) )
+#define BIT32(B)  ( (uint32_t)( ((uint32_t)1U)<<((uint32_t)(B)) ) )
+#endif
+
+#ifndef  BIT16
+#define BIT16(B)  ( (uint16_t)( ((uint16_t)1U)<<((uint16_t)(B)) ) )
 #endif
 
 #ifndef  BIT8
-#define BIT8(B)  ( (uint8_t)( ((uint32_t)1ULL)<<((uint32_t)(B)) )  & 0xFF)
+#define BIT8(B)  ( (uint8_t)( ((uint32_t)1U)<<((uint32_t)(B)) )  & 0xFF)
 #endif
 
 
@@ -131,7 +136,6 @@ typedef struct
 
 typedef struct
 {
-    mimaspack_t     *mimaPack;
     uint8_t         *wrPt[UNI_PER_OUT];
     uint16_t        uniLenLimit[UNI_PER_OUT]; // limit of bytes to use per universe, set by config
     uint16_t        dlen;        // current total length of pixel data written in outBuffer
@@ -139,15 +143,8 @@ typedef struct
     uint8_t         fillMap;
     uint8_t         fullMap;
     color_mapping_e colMap;
+    mimaspack_t     mpack;
 }out_def_t;
-
-typedef struct
-{
-    uint8_t clk_rdy:1;
-    uint8_t sys_rdy:1;
-    uint8_t idle:1;
-    uint8_t dc:5;
-}mimas_state_t;
 
 typedef struct
 {
@@ -180,6 +177,7 @@ typedef enum
     sync_ok,
     sync_consumed
 }artNetSyncState_e;
+
 typedef struct
 {
 	sm_state_e		state, prev_state;
@@ -194,16 +192,16 @@ typedef struct
 		uint16_t usesSync:1;
 		uint16_t dc:8;
 	};
-	addressing_t	startNet;
-	addressing_t    endNet;
-	uint64_t		curr_map;
-	uint64_t		expected_full_map;
+	addressing_t	startNet;           /*minimum configured address */
+	addressing_t    endNet;             /*maximum configured address */
+	addressing_t    min_uni;            /*minimum detected address */
+	uint8_t         universes_count;    /*total configured universe count */
+	uint8_t         active_unis;        /*total detected univese count */
 	uint8_t			cur_seq;
 	uint8_t         prev_seq;
-	uint8_t         universes_count;
-	uint8_t         min_uni;
-	uint8_t         active_unis;
 	uint8_t         sync_missing_cnt;
+    uint64_t		curr_map;
+	uint64_t		expected_full_map;
 	artNetSyncState_e syncState;
 }sm_t; /* artnet state machine struct */
 
@@ -223,7 +221,7 @@ typedef struct
     char            nodeName[16];
     char            userName[16];
     char            longName[64];
-    out_def_t       *outs[GLOBAL_OUTPUTS_MAX];
+    out_def_t       *outs[MIMAS_STREAM_OUT_CNT];
     uint32_t        all;
     uint32_t        miss;
     uint32_t        packetsCnt;
@@ -253,10 +251,72 @@ typedef union
     addressing_t  addr;
 }gen_addres_u;
 
+typedef enum
+{
+    msg_typ_socket_data=1,
+    msg_typ_sys_event,
+    msg_typ_pwm_cmd
+}msg_type_e;
+
+typedef enum
+{
+    sys_ev_socket_timeout,
+    sys_ev_socket_closed,
+    sys_ev_socket_opened,
+}sys_ev_e;
+
 typedef struct
 {
-    struct sockaddr_in  sender;
-    any_prot_pack_t     pl; //payload
+    msg_type_e  mtyp;
+    sys_ev_e ev_type;
+    uint32_t    data1;
+}sys_event_msg_t;
+
+typedef enum
+{
+    pwm_set_gper_cmd = 1,
+    pwm_set_gctrl_cmd =2,
+    pwm_set_div_cmd = 4,
+    pwm_set_ch_per_cmd = 8,
+    pwm_set_ch_ctrl_cmd = 16,
+    pwm_override_artnet = 32
+}pwm_cmd_type_e;
+#define ALL_PWM_CMDS (63)
+
+typedef struct
+{
+    uint8_t         startUpdIdx:3;
+    uint8_t         UpdChCount:3;
+    uint8_t         needUpdate:1;
+    uint8_t         gctrl:1;
+    uint8_t         div;
+    uint16_t        gper;
+    uint16_t        ch_pers[MIMAS_PWM_OUT_PER_GRP_CNT];
+    uint8_t         ch_ctrls[MIMAS_PWM_OUT_PER_GRP_CNT];
+}pwm_group_data_t;
+
+typedef struct{
+    msg_type_e      mtyp;
+    pwm_cmd_type_e  cmd;
+    uint8_t         grp_bm;
+    uint8_t         start_ch[MIMAS_PWM_GROUP_CNT];
+    uint8_t         ch_count[MIMAS_PWM_GROUP_CNT];
+    pwm_group_data_t data[MIMAS_PWM_GROUP_CNT];
+}pwm_cmd_msg_t;
+
+typedef struct
+{
+    union
+    {
+        struct
+        {
+            msg_type_e  mtyp;
+            struct sockaddr_in  sender;
+            any_prot_pack_t     pl; //payload
+        };
+        sys_event_msg_t sys_ev;
+        pwm_cmd_msg_t   pwm_msg;
+    };
 }peer_pack_t   __attribute__ ((aligned(64)));
 
 typedef enum

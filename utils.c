@@ -788,17 +788,18 @@ void mimas_all_black(out_def_t* outs)
 {
     int i;
 
-    for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
-        memset(outs[i].mimaPack, 0, sizeof(mimaspack_t));
-        if( MIMAS_STREAM_BM & (BIT32(i)) ){
-        mimas_store_packet(i,outs[i].mimaPack, ( outs[i].mappedLen));
+        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
+        if( MIMAS_STREAM_BM & (BIT32(i)) )
+        {
+            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
         }
     }
     mimas_refresh_start_stream(MIMAS_STREAM_BM,0);
 }
 
-mimas_state_t mimas_get_state(void)
+inline mimas_state_t mimas_get_state(void)
 {
     mimas_state_t res;
     res.clk_rdy = bcm2835_gpio_lev(MIMAS_CLK_RDY);
@@ -904,3 +905,18 @@ void NodeInit(app_node_t* an, uint8_t maxUniCount, addressing_t start_uni_addr)
         msgRelease(an->artPB, cn);
     }*/
 }
+
+int tmr_create(uint32_t *timerid )
+{
+    struct sigevent sigev;
+    memset(&sigev,0,sizeof(struct sigevent));
+    sigev.sigev_notify = SIGEV_NONE;
+    int rc = timer_create(CLOCK_MONOTONIC, &sigev, (timer_t*)timerid);
+    if(rc)
+    {
+        perror("Create Timer error");
+    }
+    return(rc);
+
+}
+//pthread_sigqueue

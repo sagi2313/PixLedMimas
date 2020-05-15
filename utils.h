@@ -1,8 +1,11 @@
 #ifndef UTILS_H_INCLUDED
 #define UTILS_H_INCLUDED
 #include "type_defs.h"
+#include "mimas_cfg.h"
 #include "protocolCommon.h"
 #include <fcntl.h>
+#include <signal.h>
+#include <time.h>
 #define PROD_PRIO_NICE (-12)
 #define CONS_PRIO_NICE (-18)
 
@@ -40,8 +43,7 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm);
 int mimas_store_packet(int chan, uint8_t* data, int len);
 int mimas_send_packet(int chan, uint8_t* data, int len);
 int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm);
-
-int mimas_store_pwm_val(uint8_t grp, int chan, uint16_t* val, uint8_t cnt);
+int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt);
 int mimas_store_pwm_period(uint8_t grp, uint16_t val);
 int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt);
 int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled);
@@ -70,4 +72,5 @@ void NodeInit(app_node_t* n, uint8_t maxUniCount, addressing_t start_uni_addr);
 int socketStart(node_t* n, uint16_t portno);
 int setIP(char* newIP, int ifIdx);
 int socket_set_blocking(const int sockfd, int on);
+int tmr_create(uint32_t *timerid );
 #endif // UTILS_H_INCLUDED

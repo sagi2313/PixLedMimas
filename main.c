@@ -30,27 +30,23 @@
 #include "mimas_cmd_defs.h""
 #define gettid syscall(SYS_gettid)
 
-
-uint16_t pwm_v[8];
-uint8_t  pwm_c[8];
-uint16_t pwm_per = 20000;
+#include <byteswap.h>
 volatile int upd_pwm = 0;
-fl_head_t RQ;
-fl_head_t UQ;
-mimaspack_t         mpacks[GLOBAL_OUTPUTS_MAX ];
-out_def_t           outs[GLOBAL_OUTPUTS_MAX ];
+
+out_def_t           outs[MIMAS_STREAM_OUT_CNT ];
 device_type_e       outputs_dev_map[64] = {dev_unknown};
 peer_pack_t         rq_data[RQ_DEPTH];
+peer_pack_t         pwm_rq[PWM_Q_DEPTH];
 trace_msg_t         ev_q[EV_Q_DEPTH];
 post_box_t*         ev_pb = NULL;
-
+post_box_t*         pwm_pb = NULL;
 
 int sock_sec;
 app_node_t prods[2];
 app_node_t* anetp=&prods[0];
-app_node_t* ascnp=&prods[1];
+/*app_node_t* ascnp=&prods[1];*/
 int altBind(int sockfd);
-recFile_t rf;
+//recFile_t rf;
 
 
 enum{
@@ -137,6 +133,11 @@ void setHandler(void (*handler)(int,siginfo_t *,void *))
 		perror("sigbus: sigaction");
 		_exit(1);
 	}
+	//SIGALRM
+	if (sigaction(SIGALRM, &action, NULL) == -1) {
+		perror("sigbus: sigaction");
+		_exit(1);
+	}
     printf("Done setting up SIG_HAN\n");
 }
 
@@ -146,7 +147,7 @@ void prnDev(int idx)
     int i;
     if(idx!=-1)
     {
-        switch(devList[idx].dev_com.dev_type)
+        switch(devList.devs[idx].dev_com.dev_type)
         {
             case unused_dev:
             {
@@ -154,17 +155,17 @@ void prnDev(int idx)
             }
             case ws_pix_dev:
             {
-                    if(devList[idx].dev_com.start_address == 0xFFFF)
+                    if(devList.devs[idx].dev_com.start_address == 0xFFFF)
                     {
-                        printf("Address %u assigned automatically for device %d\n", devList[idx].pix_devs[0]->com.start_address, idx);
-                        devList[idx].dev_com.start_address = devList[idx].pix_devs[0]->com.start_address;
+                        printf("Address %u assigned automatically for device %d\n", devList.devs[idx].pix_devs[0]->com.start_address, idx);
+                        devList.devs[idx].dev_com.start_address = devList.devs[idx].pix_devs[0]->com.start_address;
                     }
                     printf("Dev %d pixelCount %u, uniCount  %u subDevices %u startAddr %u, endAddr %u\n", \
-                    idx, devList[idx].pixel_count, devList[idx].uni_count, devList[idx].sub_dev_cnt, devList[idx].dev_com.start_address, \
-                    devList[idx].dev_com.end_address);
-                    for(i=0;i< devList[idx].sub_dev_cnt;i++)
+                    idx, devList.devs[idx].pixel_count, devList.devs[idx].uni_count, devList.devs[idx].sub_dev_cnt, devList.devs[idx].dev_com.start_address, \
+                    devList.devs[idx].dev_com.end_address);
+                    for(i=0;i< devList.devs[idx].sub_dev_cnt;i++)
                     {
-                        ws_pix_vdev_t* pxd = devList[idx].pix_devs[i];
+                        ws_pix_vdev_t* pxd = devList.devs[idx].pix_devs[i];
                         printf("subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
                         i,pxd->com.start_address, pxd->com.end_address, pxd->pixel_count, pxd->pix_per_uni, pxd->out_start_id);
 
@@ -188,17 +189,33 @@ void prnDev(int idx)
 void make_a_dev()
 {
     int res, i;
+    pwm_cfg_t *cfg;
     pwm_vdev_t pdev;
-    pdev.com.start_address = 0xFFFF;
+    pdev.com.start_address = 57;
     pdev.com.start_offset = 0;
-    pdev.ch_count = 10;
-    res = build_dev_pwm(&pdev);
-
-
     pdev.ch_count = 2;
-    build_dev_pwm(&pdev);
-    build_dev_pwm(&pdev);
-    build_dev_pwm(&pdev);
+    res = build_dev_pwm(&pdev, NULL);
+    if(res>0)
+    {
+        devList.devs[res].pwm_vdev->lims[0]->minV = 9000u;
+        devList.devs[res].pwm_vdev->lims[0]->maxV = 26000u;
+        devList.devs[res].pwm_vdev->lims[1]->minV = 9000u;
+        devList.devs[res].pwm_vdev->lims[1]->maxV = 26000u;
+    }
+    pdev.com.start_address = 57;
+prnDev(res);
+    pdev.ch_count = 1;
+    res = build_dev_pwm(&pdev, NULL);
+
+    getPwmCfg(devList.devs[res].pwm_vdev,0,&cfg);
+    cfg->lim[0].minV=0;
+    cfg->lim[0].maxV=0xFFF0;
+    setPwmLimCfg(devList.devs[res].pwm_vdev,0,cfg);
+prnDev(res);
+    //pdev.ch_count = 2;
+   // build_dev_pwm(&pdev);
+   // build_dev_pwm(&pdev);
+   // build_dev_pwm(&pdev);
 
     ws_pix_vdev_t   vd;
     vd.pixel_count = 1500;
@@ -207,11 +224,6 @@ void make_a_dev()
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
     prnDev(res);
-
-
-    vd.com.start_address = 0xFFFF;
-    res = build_dev_ws(&vd);
-    prnDev(res);
 }
 
 void InitOuts(void)
@@ -219,7 +231,7 @@ void InitOuts(void)
     int i, j;
     make_a_dev();
     uint8_t *pt;
-    for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+    for(i=0;i< (MIMAS_STREAM_OUT_CNT  * MIMAS_DEV_CNT);i++)
     {
         anetp->artnode->outs[i] = &outs[i];
         outs[i].colMap = grb_map_e;
@@ -230,10 +242,9 @@ void InitOuts(void)
             outs[i].mappedLen += outs[i].uniLenLimit[j];
         }
         outs[i].dlen = 0;
-        outs[i].mimaPack = &mpacks[i];
         outs[i].fillMap = 0;
         outs[i].fullMap = 0;
-        pt = &outs[i].mimaPack->dmxp[0].dmx_data[0];
+        pt = &outs[i].mpack.dmxp[0].dmx_data[0];
         for(j=0;j<UNI_PER_OUT;j++)
         {
             outs[i].wrPt[j] = pt;
@@ -254,56 +265,16 @@ void InitOuts(void)
 
 int sendOutToMimas(int oSel)
 {
-    mimas_state_t mSt;
-    mSt =mimas_get_state();
-    if( mSt.idle == 1 )
-    {
-        do
-        {
-            mimas_prn_state(&mSt);
-            time_t now;
-            time(&now);
-            struct tm ts = *localtime(&now);
-            char tsbuf[80];
-            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-            MIMAS_RESET
-            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__, __LINE__, tsbuf);
-            bcm2835_delayMicroseconds(10000ull);
-            mSt =mimas_get_state();
-            mimas_prn_state(&mSt);
-        }while(mSt.idle==1);
-        return(-110);
-    }
-    int loops = 0;
-    while( mSt.sys_rdy == 0 )
-    {
-        if(++loops > 250) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
-        {
-            printf("Mimas stuck badly!\n");
-            mimas_prn_state(&mSt);
-            time_t now;
-            time(&now);
-            struct tm ts = *localtime(&now);
-            char tsbuf[80];
-            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-            MIMAS_RESET
-            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__,__LINE__, tsbuf);
-            bcm2835_delayMicroseconds(10000ull);
-            mSt =mimas_get_state();
-            mimas_prn_state(&mSt);
-            return(-100);
-        }
-        bcm2835_delayMicroseconds(100ull);
-        mSt =mimas_get_state();
-     }
-    return(mimas_store_packet(oSel,(uint8_t*)outs[oSel].mimaPack,outs[oSel].dlen));
+    return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen));
 }
 
 void* consumer(void* d)
 {
-    uint32_t idx, i, attention;
-    peer_pack_t     ppack;
-    peer_pack_t *p = &ppack;
+    int                 devCnt, devIdx[MAX_VDEV_CNT];
+    uint32_t idx, i,    attention;
+    peer_pack_t         ppack;
+    peer_pack_t *p =    &ppack;
+    uint64_t            peer_id;
     whole_art_packs_rec_t rec;
     app_node_t *artn = (app_node_t*)d;
     post_box_t* pb = artn->artPB;
@@ -318,7 +289,7 @@ void* consumer(void* d)
     int mark, lowMark;
     lowMark = RQ_DEPTH;
     art_resp_e  art_res;
-
+    gen_addres_u    raw_addr;
     uint8_t runi, oSel, sUni; //relative universe
     int which = PRIO_PROCESS;
     int ret;
@@ -337,6 +308,7 @@ void* consumer(void* d)
     trm[cons_mimas_start].ev = cons_mimas_start;
     uint32_t popcnt=0;
     uint16_t pwmv ;
+    mimas_out_dev_t *cdev;
     trace_msg_t *trms[5];
     trms[0]=&trm[0];
     trms[1]=&trm[1];
@@ -369,7 +341,7 @@ void* consumer(void* d)
    {
        //if (CPU_ISSET(i, &cpuset))
        if((cpuset.__bits[0] & j) !=0)
-           printf("    CPU %d\n", i);
+           printf("CPU %d, ", i);
         j<<=1;
     }
 
@@ -388,15 +360,50 @@ void* consumer(void* d)
 
     while(1)
     {
-        trms[0]->msg_cnt = popcnt++;
+        cdev = NULL;
+
         do
         {
             usleep(2);
             ret = getCopyMsg(&pb->rq_head, p);
         }while(ret);
-
         clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
-        post_msg(&ev_pb->rq_head, trms[0],sizeof(trace_msg_t));
+        switch(p->mtyp)
+        {
+            case msg_typ_socket_data:
+            {
+                trms[0]->msg_cnt = popcnt++;
+                post_msg(&ev_pb->rq_head, trms[0],sizeof(trace_msg_t));
+                break;
+            }
+            case msg_typ_sys_event:
+            {
+                switch(p->sys_ev.ev_type)
+                {
+                    case sys_ev_socket_timeout:
+                    {
+                        printf("Socket TimeOut received on sock %d\n", p->sys_ev.data1);
+                        break;
+                    }
+                    default:
+                    {
+                        printf("Socket event %d received on sock %d\n", (uint32_t)p->sys_ev.ev_type, p->sys_ev.data1);
+                        break;
+                    }
+                }
+
+                continue;
+                break;
+            }
+            default:
+            {
+                printf("Unknown msgType received : %u\n", (uint32_t)p->mtyp);
+                continue;
+                break;
+            }
+        }
+
+        peer_id = (*(uint64_t*)&p->sender.sin_port) & 0xFFFFFFFFFFFF;
         ap =  &p->pl.art; //&pp->pl.art;
         art_res = ArtNetDecode(ap);
         //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full);
@@ -404,7 +411,7 @@ void* consumer(void* d)
         {
             case 	OpPoll:
             {
-                printf("Got POLL from %s\n",inet_ntoa(p->sender.sin_addr));
+                printf("================\nGot POLL from %s\n",inet_ntoa(p->sender.sin_addr));
                 make_artnet_resp(p);
                 //ap->ArtDmxOut.head.id[0] = '\0';
                 //msgRead(&pb->rq_head);
@@ -430,7 +437,7 @@ void* consumer(void* d)
             {
                 //putNode(&RQ, cn);
                 //ap->ArtDmxOut.head.id[0] = '\0';
-                printf("ArtErr unknown OpCode %x\n", ap->ArtDmxOut.head.OpCode.OpCode);
+                printf("================\nArtErr unknown OpCode %x\n================\n", ap->ArtDmxOut.head.OpCode.OpCode);
                 //msgRelease(pb,cn);
                 //msgRead(&pb->rq_head);
                 continue; // get next Packet
@@ -448,7 +455,7 @@ void* consumer(void* d)
                     {
                         sm->hasSync = 1;
                         sm->sync_missing_cnt = 0;
-                        printf("Using Sync packets ...\n");
+                        printf("================\nUsing Sync packets ...\n");
                         continue; // get next Packet
                         break;
                     }
@@ -456,7 +463,7 @@ void* consumer(void* d)
                     {
                         if(sm->hasSync == 0)
                         {
-                            printf("detected sync packet while working. Resetting SM ...\n");
+                            printf("================\ndetected sync packet while working. Resetting SM ...\n================\n");
                             SmReset(me, eResetArtOther);
                             continue; // get next Packet
                         }
@@ -473,10 +480,10 @@ void* consumer(void* d)
                     }
                     default:
                     {
-                        printf("Sync received in state %d\n", sm->state);
+                        printf("================\nSync received in state %d\n", sm->state);
                         if(sm->hasSync == 0)
                         {
-                            printf("detected sync packet in wrong state. Resetting SM ...\n");
+                            printf("================\ndetected sync packet in wrong state. Resetting SM ...\n================\n");
                             SmReset(me, eResetArtOther);
                             continue; // get next Packet
                         }
@@ -489,30 +496,23 @@ void* consumer(void* d)
             }
             case OpDmx:
             {
+                raw_addr.anet = ap->ArtDmxOut.a_net;
                 clock_gettime(CLOCK_REALTIME, &trms[1]->ts);
                 me->last_pac_proc = trms[1]->ts;
-                trms[1]->art_addr = ap->ArtDmxOut.a_net.SubUni.subuni_full;
+                trms[1]->art_addr = raw_addr.addr;
                 post_msg(&ev_pb->rq_head, trms[1],sizeof(trace_msg_t));
                 // check if incoming universe falls in the range we handle
-                int devIdx = findVDevAtAddr(ap->ArtDmxOut.a_net.SubUni.subuni_full);
-                if(devIdx>-1)
-                {
-                   // prnDev(devIdx);
-                }
+                // TODO: align sm->startNet, sm->endNet with devList and config
                 if((ap->ArtDmxOut.a_net.SubUni.subuni_full < (sm->startNet & 0xFF)) || \
                     (ap->ArtDmxOut.a_net.SubUni.subuni_full > (sm->endNet & 0xFF)))
                 {
-                    //putNode(&RQ, cn);
-                    //msgRelease(pb,cn);
-                    //msgRead(&pb->rq_head);
                     continue; // dont care about this universe, get next Packet
-                    break;
                 }
                 // adjust min_uni if required
-                runi = ap->ArtDmxOut.a_net.SubUni.subuni_full - (sm->startNet &0xFF);
-                if(sm->min_uni > ap->ArtDmxOut.a_net.SubUni.subuni_full)
+                runi = raw_addr.addr - sm->startNet;
+                if(sm->min_uni > raw_addr.addr)
                 {
-                    sm->min_uni = ap->ArtDmxOut.a_net.SubUni.subuni_full;
+                    sm->min_uni = raw_addr.addr;
                 }
                 switch(sm->state)
                 {
@@ -520,9 +520,9 @@ void* consumer(void* d)
                     {
                         //if we got a universe for second time, and its the minimum we probably have them all, so we prepare for next state
                         if( (sm->expected_full_map & BIT64(runi)) && \
-                            (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) )
+                            (sm->min_uni == raw_addr.addr) )
                         {
-                            for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+                            for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
                             {
                                 outs[i].dlen = 0;
                                 outs[i].fullMap = sm->expected_full_map & (BIT64(UNI_PER_OUT)  - 1u);
@@ -531,17 +531,13 @@ void* consumer(void* d)
                             start_bm = 0;
                             sm->expected_full_map = 0llu;
                             sm->state = wait_sync_e;
-                            printf("Going wait_sync_e\n");
+                            printf("================\nGoing wait_sync_e\n");
                             sm->DataOk = 1;
-                            //setSockTimout(me->sockfd,1000);
                             sm->active_unis = 0;
                             /*dont break, fall through to wait sync state */
                         }
                         else
                         {
-                            //putNode(&RQ, cn); // return this node to unused pile
-                            //msgRelease(pb,cn);
-                            //msgRead(&pb->rq_head);
                             sm->expected_full_map|=BIT64(runi);
                             continue;  // don't process  output, got get packets
                             break;
@@ -550,7 +546,7 @@ void* consumer(void* d)
                     case	wait_sync_e:
                     {
                         // if we got minimum known uni for a second time move to working state
-                        if( (sm->min_uni == ap->ArtDmxOut.a_net.SubUni.subuni_full) && (sm->expected_full_map & BIT64(runi)) )
+                        if( (sm->min_uni == raw_addr.addr) && (sm->expected_full_map & BIT64(runi)) )
                         {
                             sm->state = working_e;
                             time_t now;
@@ -558,16 +554,13 @@ void* consumer(void* d)
                             struct tm ts = *localtime(&now);
                             char tsbuf[80];
                             strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-                            printf("Going working_e, %u active unis at %s\n", sm->active_unis, tsbuf);
+                            printf("================\nGoing working_e, %u active unis at %s\n", sm->active_unis, tsbuf);
                             sm->curr_map = 0llu;
                             /*dont return nod yet to pile, it will be used in working state, and returned there.
                              * also dont break, fall through to working state*/
                         }
                         else
                         {
-                            //putNode(&RQ, cn); // return this node to unused pile
-                            //msgRelease(pb,cn);
-                            //msgRead(&pb->rq_head);
                             if((sm->expected_full_map & BIT64(runi) )== 0llu)sm->active_unis++;
                             sm->expected_full_map|=BIT64(runi);
                             continue;
@@ -576,23 +569,16 @@ void* consumer(void* d)
                     }
                     case working_e:
                     {
+                        devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
+
                         oSel = runi / UNI_PER_OUT;
                         sUni = runi % UNI_PER_OUT;
+
+
                         // if Sync packet is not present in stream and we got minimum uni, it must be a new frame, so reset bitmasks, and get fresh data
                         if(sm->hasSync == 0)
                         {
-                        /*
-                            if(runi == 0)
-                            {
-                                sm->curr_map = 0llu;
-                                outs[oSel].fillMap = 0;
-                                outs[oSel].dlen = 0;
-                            }
-*/
-                           // printf("currMap %lu runi = %u oSel = %u\n",sm->curr_map, runi, oSel);
                             outs[oSel].fillMap|=BIT8(sUni);
-                            //mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);  // write mapped pixel data in outbuffer
-                            //msgRead(&pb->rq_head);                          // free up that msg slot, data is now copied in out buffer
                             if((sm->curr_map & BIT64(runi)))    // if this uni was already mapped in output, it will be overwritten by new packet, from previous 2 lines
                             {
                                 fl_head_t info;
@@ -607,12 +593,11 @@ void* consumer(void* d)
                                     sm->state = out_of_sync_e;
                                     start_bm = 0;
                                     sm->curr_map = 0llu;
-                                    for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
+                                    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
                                     {
                                         outs[i].dlen = 0;
                                         outs[i].fillMap = 0;
                                     }
-                                    //synced = 0;
                                     continue;
                                 }
                             }
@@ -621,8 +606,6 @@ void* consumer(void* d)
                                 sm->curr_map|=BIT64(runi);
                                 outs[oSel].dlen+=outs[oSel].uniLenLimit[sUni];
                             }
-                            //timesum_proc+=clock()-p1;
-                            //proc_cnt++;
                         }
                         else
                         {
@@ -638,40 +621,53 @@ void* consumer(void* d)
                             {
                                 if(++sm->sync_missing_cnt  > (2 * sm->active_unis))
                                 {
-                                    //putNode(&RQ,cn); // done with note, send to unused pile
-                                    //msgRelease(pb,cn);
-                                    //msgRead(&pb->rq_head);
                                     SmReset(me, eResetFrErr);
                                 }
                             }
-
-                            //putNode(&RQ,cn); // done with note, send to unused pile
-                            //msgRelease(pb,cn);
-                            //msgRead(&pb->rq_head);
-
-                            //if(synced == 0 )continue; // just for sanity, synced can't normally be '1' at this point
                         }
-                        if(outputs_dev_map[oSel] == dev_pixels)
+                        //if(outputs_dev_map[oSel] == dev_pixels)
+                        for(i=0;i<devCnt;i++)
                         {
-                            mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
-                            if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
+                             cdev = &devList.devs[devIdx[i]];
+                             vDevSetPeer(peer_id, devIdx[i]);
+
+                            if (cdev!=NULL)
                             {
-                                rc = sendOutToMimas(oSel);
-                                if(rc == 0)
+                                switch(GET_VDEV_TYPE(*cdev))
                                 {
-                                    start_bm|=BIT32(oSel);
-                                    clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
-                                    post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
+                                    case ws_pix_dev:
+                                    {
+                                        mapColor(&ap->ArtDmxOut.dmx,&outs[oSel],sUni);
+                                        if( (outs[oSel].fullMap>0) && (outs[oSel].fillMap == outs[oSel].fullMap) )
+                                        {
+                                            rc = sendOutToMimas(oSel);
+                                            clock_gettime(CLOCK_REALTIME, &trms[2]->ts);
+                                            if(rc == 0)
+                                            {
+                                                start_bm|=BIT32(oSel);
+                                                post_msg(&ev_pb->rq_head, trms[2],sizeof(trace_msg_t));
+                                            }
+                                            else
+                                            {
+                                                start_bm&=(0x3FF & (~BIT32(oSel)));
+                                                outs[oSel].fillMap = 0;
+                                                printf("Error %d from mimas sending %d output\n",rc,oSel);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    case pwm_dev:
+                                    {
+                                        static int msg_posts=0;
+                                        post_msg(&pwm_pb->rq_head, p, sizeof(peer_pack_t));
+                                        printf("pwm_msg_posts = %d\n",++msg_posts);
+                                        break;
+                                    }
                                 }
-                                else
-                                {
-                                    start_bm&=(0x3FF & (~BIT32(oSel)));
-                                    outs[oSel].fillMap = 0;
-                                    printf("Error %d from mimas sending %d output\n",rc,oSel);
-                                }
+
                             }
-                        }
-                        else if(outputs_dev_map[oSel] == dev_pwm)
+                        } //cdevs for loop end
+                        /*else if(outputs_dev_map[oSel] == dev_pwm)
                         {
                             for(i=0;i<2;i++)
                             {
@@ -683,8 +679,8 @@ void* consumer(void* d)
                             }
 
                             //printf("\n");
-                            mimas_store_pwm_val(PWM_GRP_ALL, 0, pwm_v/*&pwmv*/,8);
-                        }
+                            mimas_store_pwm_val(PWM_GRP_ALL, 0, pwm_v,8);
+                        }*/
                         break; // go process out
                     } // working state inside OpDMX closes
                     break;
@@ -696,89 +692,45 @@ void* consumer(void* d)
                 //msgRead(&pb->rq_head);
             }
         } // switch OpCode closes
-// here starts output Handling
-            if(sm->hasSync == 1)
+        // here starts output Handling
+        if(sm->hasSync == 1)
+        {
+            switch(sm->syncState)
             {
-                switch(sm->syncState)
+                case no_sync_yet:
+                case sync_consumed:
                 {
-                    case no_sync_yet:
-                    case sync_consumed:
-                    {
-                        continue;
-                        break;
-                    }
-                    case sync_ok:
-                    {
-                        break;
-                    }
+                    continue;
+                    break;
+                }
+                case sync_ok:
+                {
+                    break;
                 }
             }
-            if(sm->curr_map == sm->expected_full_map)
+        }
+        if(sm->curr_map == sm->expected_full_map)
+        {
+            clock_gettime(CLOCK_REALTIME, &trms[3]->ts);
+            mimas_refresh_start_stream(start_bm,0x00C0);
+            clock_gettime(CLOCK_REALTIME, &trms[4]->ts);
+            post_msg(&ev_pb->rq_head, trms[3],sizeof(trace_msg_t));
+            post_msg(&ev_pb->rq_head, trms[4],sizeof(trace_msg_t));
+            me->last_mimas_ref = trms[3]->ts;
+            start_bm = 0;
+            sm->curr_map = 0llu;
+            for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
             {
-                //bcm2835_delayMicroseconds(3000ull);
-
-                mSt =mimas_get_state();
-                if(mSt.sys_rdy==0)
-                {
-                    int loops=0;
-                    while( (mSt.sys_rdy == 0) || (mSt.idle ==1))
-                    {
-                        //usleep(50);
-                         bcm2835_delayMicroseconds(10ull);
-                         //mimas_prn_state(&mSt);
-                         mSt =mimas_get_state();
-                         if(++loops > 3)
-                         {
-                             if((mSt.idle==1) || (mSt.sys_rdy ==0)) // means mimas is busy
-                             {
-                                mimas_prn_state(&mSt);
-                                MIMAS_RESET
-                                printf("WARNING(start): mimas reset. line: %d\n", __LINE__);
-                                bcm2835_delayMicroseconds(1000ull);
-                             }
-                             bcm2835_delayMicroseconds(250ull);
-                             mSt =mimas_get_state();
-                             loops = 0;
-                        }
-                     }
-                }
-                //mimas_start_stream(start_bm,0);
-                //__atomic_add_fetch(&me->frames, 1, __ATOMIC_RELAXED);
-
-                clock_gettime(CLOCK_REALTIME, &trms[3]->ts);
-                mimas_refresh_start_stream(start_bm,0x00C0);
-                clock_gettime(CLOCK_REALTIME, &trms[4]->ts);
-                post_msg(&ev_pb->rq_head, trms[3],sizeof(trace_msg_t));
-                post_msg(&ev_pb->rq_head, trms[4],sizeof(trace_msg_t));
-                me->last_mimas_ref = trms[3]->ts;
-
-                //clock_gettime( CLOCK_PROCESS_CPUTIME_ID, &tmp);
-                //timesum+=(tmp.tv_nsec - timers[idle_e].tv_nsec);
-/*
-                t2 = clock();
-                timesum += (uint64_t)(t2-t1);
-                timesum_mimas += (uint64_t)(t2-t3);
-                t1 = t2;
-                timeloop++;
-                */
-                start_bm = 0;
-                sm->curr_map = 0llu;
-                for(i=0;i<GLOBAL_OUTPUTS_MAX;i++)
-                {
-                    outs[i].dlen = 0;
-                    outs[i].fillMap = 0;
-                }
-                sm->syncState = sync_consumed;
-                //timers[idle_e].tv_sec = tmp.tv_sec;
-
+                outs[i].dlen = 0;
+                outs[i].fillMap = 0;
             }
-
-       // } // cn!=NULL closes
-
+            sm->syncState = sync_consumed;
+        }
     }
 }
 #include <time.h>
 //#define ALL_EVENTS
+//#define EVENT_DIFFS
 void* one_sec(void* d)
 {
     /*time_t     now;
@@ -906,12 +858,11 @@ void* one_sec(void* d)
 }
 
 #define MMLEN_MMAX   40
-
-
 #define MILIS   (1000000ul)
+
 void* producer(void* d)
 {
-    uint32_t idx, i, k;
+    uint32_t  i, msg_need;
     peer_pack_t *packs[MMLEN_MMAX];
     struct mmsghdr msgs[MMLEN_MMAX];
     struct iovec iovecs[MMLEN_MMAX];
@@ -923,7 +874,6 @@ void* producer(void* d)
     int mysock = n->sockfd;
     fl_t cn;
     mimas_state_t mSt;
-    ssize_t sock_ret;
     int addr_len;
     pid_t pid;
     int ret;
@@ -987,22 +937,22 @@ void* producer(void* d)
     //p = rezerveMsg(&pb->rq_head);
     int32_t msgcnt;
     #define MMLEN batch
-    setSockTimout(n->sockfd, 1000);
     //cn =msgRezerveNB(pb);
 
     memset(hits,0,sizeof(hits));
 
     memset(packs,0,sizeof(packs));
-    k = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
-    for(i=0;i<k;i++)
+    msg_need = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
+    for(i=0;i<msg_need;i++)
     {
         p = packs[i];
         if(p==NULL) break;
+        p->mtyp = msg_typ_socket_data;
         iovecs[i].iov_base = &p->pl.art;
         msgs[i].msg_hdr.msg_name = &p->sender;
         msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
-    k = i;
+    msg_need = i;
     setSockTimout(n->sockfd, 0);
     while(1)
     {
@@ -1013,13 +963,14 @@ void* producer(void* d)
 
         if((n->sm.DataOk == 1) && (n->sm.prev_state!=working_e))
         {
-            setSockTimout(n->sockfd,150);
+            setSockTimout(n->sockfd,500);
         }
         timeout.tv_sec = 0l;
-        timeout.tv_nsec = 250l * MILIS;
+        timeout.tv_nsec = (25l * MILIS)/10l;
         sm_state_cache = n->sm.state;
         if(sm_state_cache!=working_e)batch=1;
-        msgcnt = recvmmsg(n->sockfd, msgs, k, MSG_WAITALL/* MSG_WAITFORONE */, &timeout);
+        msg_need = MIN(msg_need,batch);
+        msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL/* MSG_WAITFORONE */, &timeout);
         time(&trm.ts2);
 
 
@@ -1065,21 +1016,22 @@ void* producer(void* d)
             }
             //printf("Prod: got %u msgs\n", msgcnt);*/
             //hits[msgcnt]++;
+            /*send messages */
             msgWrittenMulti(&pb->rq_head,  msgcnt);
             do
             {
-                k = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
-                for(i=0;i<k;i++)
+                msg_need = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
+                for(i=0;i<msg_need;i++)
                 {
                     p = packs[i];
                     if(p==NULL) break;
+                    p->mtyp = msg_typ_socket_data;
                     iovecs[i].iov_base = &p->pl.art;
                     msgs[i].msg_hdr.msg_name = &p->sender;
                     msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
                 }
-                k = i;
-            }while(k<1);
-
+                msg_need = i;
+            }while(msg_need<1);  // if we managed to get at least 1 slot proceed
             artn->artnode->all+=msgcnt;
             artn->artnode->packetsCnt+=msgcnt;
             /*totmsges+=msgcnt;
@@ -1101,18 +1053,20 @@ void* producer(void* d)
             {
                 if(n->sm.active_unis & 1)
                 {
-                    if(n->sm.active_unis>(UNI_PER_OUT * GLOBAL_OUTPUTS_MAX))
+                    if(n->sm.active_unis>(UNI_PER_OUT * MIMAS_STREAM_OUT_CNT))
                     {
                         batch = UNI_PER_OUT;
                     }
                     else
                     {
                         batch  = n->sm.active_unis;
+                        batch++;
+                        batch>>=1;
                     }
                 }
                 else
                 {
-                    if(n->sm.active_unis>(UNI_PER_OUT * GLOBAL_OUTPUTS_MAX))
+                    if(n->sm.active_unis>(UNI_PER_OUT * MIMAS_STREAM_OUT_CNT))
                     {
                         batch = UNI_PER_OUT;
                     }
@@ -1137,85 +1091,52 @@ void* producer(void* d)
             }
             else
             {
+                int  lockFree=0;
+                int tries=0;
+                int errLocal;
                 struct timespec sockerrTs;
                 clock_gettime(CLOCK_REALTIME, &sockerrTs);
-                printf("Last rx %ld.%09ld\nLast pp %ld.%09ld\nLast mr %ld.%09ld\nSock er %ld.%09ld\n", \
-                n->last_rx.tv_sec,n->last_rx.tv_nsec, \
-                n->last_pac_proc.tv_sec,n->last_pac_proc.tv_nsec, \
-                n->last_mimas_ref.tv_sec,n->last_mimas_ref.tv_nsec, \
-                sockerrTs.tv_sec,sockerrTs.tv_nsec);
-                usleep(500000);
                 setSockTimout(n->sockfd, 0);
                 n->sm.DataOk = 0;
-
-                if(errno == EAGAIN)
+                sys_event_msg_t *sysev;
+                peer_pack_t* p;
+                do{
+                    p =rezerveMsg(&pb->rq_head);
+                    usleep(5);
+                }while(p == NULL);
+                p->mtyp = msg_typ_sys_event;
+                p->sys_ev.ev_type = sys_ev_socket_timeout;
+                p->sys_ev.data1 = n->sockfd;
+                msgWritten(&pb->rq_head);
+                if(errno != EAGAIN)
                 {
-                    int  lockFree=0;
-                    int tries=0;
-                    do{
+
+                    errLocal = show_socket_error_reason(n->sockfd);
+                    printf("================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
+                    SmReset(n, eResetUnknown);
+                }
+                else
+                {
+                    do
+                    {
                         lockFree =  pthread_spin_trylock(&pb->rq_head.lock) ;
                     }while((lockFree !=0  )&&(tries++<100));
                     SmReset(n, eResetSockTimeout);
                     time(&now);
                     ts = *localtime(&now);
                     strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-                    printf("EAGAIN %s : lock %d\n",tsbuf,lockFree);
-                    errno=0;
+                    printf("================\nData Timeout(EAGAIN,lock %d) %s\n================\n",lockFree,tsbuf);
                     if(lockFree==0)pthread_spin_unlock(&pb->rq_head.lock) ;
-                    //usleep(1);
-                    //pthread_yield();
-                    msgcnt = 0;
-                    /*
-                    i = close(n->sockfd);
-                    if(i != 0) perror("close Socket:");
-                    else
-                    do{
-                    i = socketStart(n,ARTNET_PORT);
-                    if(i)sleep(1);
-                    }while(i!=0);*/
-                    continue;
                 }
-                else
-                {
-                    int errLocal;
-                    errLocal = show_socket_error_reason(n->sockfd);
-                    printf("errno %d, sock ret %d, fd %d, idx %d, errLocal %d\n", errno, sock_ret, n->sockfd, idx, errLocal);
-                    if(errno == 11)
-                    {
-                        SmReset(n, eResetSockTimeout);
-                    }
-                    else
-                    {
-
-                        SmReset(n, eResetUnknown);
-                    }
-                    errno = 0;
-                    setSockTimout(n->sockfd,0);
-                    mimas_all_black(&outs);
-                    bcm2835_delayMicroseconds( 6000ull );
-                    mSt = mimas_get_state();
-                    mimas_prn_state(&mSt);
-                    i = 0;
-                    while(((mSt.clk_rdy==0)||(mSt.sys_rdy==0))&&(mSt.idle == 0))
-                    {
-                        bcm2835_delayMicroseconds( 1000ull );
-                        mSt = mimas_get_state();
-                        if(++i>30)
-                        {
-                            printf("mimas maybe Stuck!\n");
-                            mimas_prn_state(&mSt);
-                            break;
-                        }
-                    }
-                    if((mSt.clk_rdy==0)||(mSt.sys_rdy==0))
-                    {
-                        printf("mimas needs reset...\n");
-                        mimas_reset();
-                        bcm2835_delayMicroseconds(1000ull);
-                        mimas_prn_state(NULL);
-                    }
-                    mimas_prn_state(NULL);
-                }
+                errno = 0;
+                msgcnt = 0;
+                mimas_all_black(&outs);
+                usleep( 5000ul );
+                printf("Last rx %ld.%09ld\nLast pp %ld.%09ld\nLast mr %ld.%09ld\nSock er %ld.%09ld\n================\n", \
+                n->last_rx.tv_sec,n->last_rx.tv_nsec, \
+                n->last_pac_proc.tv_sec,n->last_pac_proc.tv_nsec, \
+                n->last_mimas_ref.tv_sec,n->last_mimas_ref.tv_nsec, \
+                sockerrTs.tv_sec,sockerrTs.tv_nsec);
             }
         }
     }
@@ -1226,14 +1147,15 @@ int initMessaging(void)
 {
     memset((void*)(ev_q), 0, sizeof(ev_q));
     memset((void*)(rq_data), 0, sizeof(rq_data));
-    ev_pb = createPB(EV_Q_DEPTH,"EVQ",ev_q);
-    post_box_t* mainPB =createPB(EV_Q_DEPTH,"MAINPB", (void*)&rq_data[0]);
+    ev_pb = createPB(EV_Q_DEPTH,"EVQ",ev_q, sizeof(ev_q));
+    /*post_box_t* mainPB =createPB(EV_Q_DEPTH,"MAINPB", (void*)&rq_data[0], );
     if(mainPB)
     {
         setDefPB(mainPB);
         return(0);
     }
-    return(-1);
+    return(-1);*/
+    return( ev_pb!=NULL?0:-1);
 }
 
 void pmwTest();
@@ -1254,11 +1176,11 @@ int main(void)
     }
 
     initMessaging();
-    anetp->artPB = createPB(RQ_DEPTH,"ArtNetPB", (void*)&rq_data[0]);
-    ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0]);
+    anetp->artPB = createPB(RQ_DEPTH,"ArtNetPB", (void*)&rq_data[0], sizeof(rq_data));
+    /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/
     anetp->artnode = createNode(protoArtNet);
-    ascnp->artnode = createNode(protosACN);
-
+    /*ascnp->artnode = createNode(protosACN);*/
+    init_mimas_vdevs();
     InitOuts();
     initSPI();
 
@@ -1276,7 +1198,7 @@ int main(void)
     //getInterfaces();
     //getInterfaces();
     socketStart(anetp->artnode, ARTNET_PORT);
-    socketStart(ascnp->artnode, ACN_SDT_MULTICAST_PORT);
+    /*socketStart(ascnp->artnode, ACN_SDT_MULTICAST_PORT);*/
     //NodeInit(anetp, (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT), 0x11);
     NodeInit(anetp, (64), 0x11);
     art_set_node(anetp->artnode);
@@ -1320,47 +1242,209 @@ int main(void)
     }
 */
 
+
 void pmwTest()
 {
-    int dir[8];
-    upd_pwm=0;
-    pwm_per = 59999;
-    int i;
-    for(i=0; i < 8; i++)
-    {
-        pwm_v[i] =  (500 * i) ;
-        pwm_v[i] %= 3900;
-        pwm_v[i] += 2400;
-        pwm_c[i] = 1;
-        dir[i] = 10;
-    }
+    pwm_group_data_t pwm_d[MIMAS_PWM_GROUP_CNT];
+    memset((void*)pwm_d, 0, sizeof(pwm_group_data_t)* MIMAS_PWM_GROUP_CNT);
+    post_box_t* pb = createPB(PWM_Q_DEPTH,"PwmPB", (void*)&pwm_rq[0], sizeof(pwm_rq));
+    pwm_out_dev_t* pwms[MIMAS_PWM_GROUP_CNT];
+    pwm_cmd_msg_t  pwm_msg;
+    uint8_t enable_msk[MIMAS_PWM_GROUP_CNT];
+    pwms[0] = getMimasPwmDevices();
+    pwms[1]  = pwms[0]+1;
+    pwm_pb = pb;
+    peer_pack_t *pkt;
+    peer_pack_t pack;
+    int devIdx[MAX_VDEV_CNT];
+    int devCnt, j, k;
+    gen_addres_u    raw_addr;
+    pwm_vdev_t *cdev;
 
-    int div = 39;
-    mimas_store_pwm_div(PWM_GRP_ALL, div);
-    mimas_store_pwm_period(PWM_GRP_ALL, pwm_per);
-    mimas_store_pwm_chCntrol(PWM_GRP_ALL, 0,pwm_c,8);
-    //mimas_store_pwm_val(PWM_GRP_ALL, 0,pwm_v,8);
-    mimas_store_pwm_gCntrol(PWM_GRP_ALL, 1);
-    upd_pwm|=2;
-    sleep(2);
-    do
-    {/*
-        for(i=0;i<8;i++)
+    for(j=0;j<MIMAS_PWM_GROUP_CNT;j++)
+    {
+        pwm_d[j].gctrl =1;
+        pwm_d[j].div = 39u;
+        pwm_d[j].gper = 59999u;
+        for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
         {
-            pwm_v[i]+=dir[i];
-            if(pwm_v[i]>6300)
+            pwm_d[j].ch_pers[k] = 16000;
+            pwm_d[j].ch_ctrls[k] = 1;
+        }
+    }
+    pwm_msg.mtyp = msg_typ_pwm_cmd;
+    pwm_msg.cmd = ALL_PWM_CMDS;
+    pwm_msg.grp_bm = PWM_GRP_ALL;
+    pwm_msg.start_ch[0] = 0;
+    pwm_msg.start_ch[1] = 0;
+    pwm_msg.ch_count[0] = MIMAS_PWM_OUT_PER_GRP_CNT;
+    pwm_msg.ch_count[1] = MIMAS_PWM_OUT_PER_GRP_CNT;
+    pwm_msg.data[0] = pwm_d[0];
+    pwm_msg.data[1] = pwm_d[1];
+    post_msg(&pb->rq_head,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
+
+    int rc;
+
+    pkt = &pack;
+    do
+    {
+        do
+        {
+            rc = getCopyMsg(&pb->rq_head, pkt);
+            //pkt = getMsg(& (*pb).rq_head);
+            //if(pkt == NULL)usleep(10);
+            if(rc<0)usleep(100);
+        //}while(pkt == NULL);
+        }while(rc<0);
+
+        switch(pkt->mtyp)
+        {
+            case msg_typ_socket_data:
             {
-                dir[i] = -100;
-            }
-            else
-            {
-                if(pwm_v[i]<2400)
+                art_net_pack_t* dat = &pkt->pl.art;
+                art_resp_e  art_res;
+                art_res = ArtNetDecode(dat);
+                cdev = NULL;
+                //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full);
+                switch(dat->ArtDmxOut.head.OpCode.OpCode)
                 {
-                    dir[i] = 100;
+                    case OpDmx:
+                    {
+                        raw_addr.anet = dat->ArtDmxOut.a_net;
+                        devCnt = findVDevsAtAddr(raw_addr.addr, &devIdx);
+                        uint16_t tVal;
+                        uint8_t* datapt;
+                        pwm_ch_data_t* cd;
+                        printf("found %d pwmDevices\n", devCnt);
+                        for(k=0;k<devCnt;k++)
+                        {
+                            cdev = devList.devs[devIdx[k]].pwm_vdev;
+                            if ((cdev!=NULL) && (cdev->com.dev_type == pwm_dev))
+                            {
+                                // send to mimas
+                                datapt = &dat->ArtDmxOut.dmx[cdev->com.start_address];
+
+                                for(j=0;j< cdev->ch_count; j++)
+                                {
+                                    cd = &cdev->chan_data[j];
+                                    tVal = pwmMapValue(cdev , j, datapt);
+                                    if(tVal!=pwm_d[cd->phyGrp].ch_pers[cd->phyIdx])
+                                    {
+                                        if(pwm_d[cd->phyGrp].needUpdate == 0)
+                                        {
+                                            pwm_d[cd->phyGrp].needUpdate = 1;
+                                            pwm_d[cd->phyGrp].startUpdIdx = pwm_d[cd->phyGrp].ch_pers[cd->phyIdx] ;
+                                        }
+                                        pwm_d[cd->phyGrp].ch_pers[cd->phyIdx] = tVal;
+                                        pwm_d[cd->phyGrp].UpdChCount++;
+                                        printf("Dev %d, ch %d inV %u outV %u\n", k, j, *(uint16_t*)datapt, tVal);
+                                    }
+                                    //setPwmVal(cdev->pwm_vdev , j, datapt);
+                                    if(cdev->chan_data[j]->_16bits!=0)datapt++;
+                                    datapt++;
+                                }
+                             }
+                        }
+                        for(k=0;k<MIMAS_PWM_GROUP_CNT;k++)
+                        {
+                            if(pwm_d[k].needUpdate)
+                            {
+                                j = mimas_store_pwm_val( \
+                                                BIT8(k), \
+                                                pwm_d[k].startUpdIdx \
+                                                ,&pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
+                                                pwm_d[k].UpdChCount);
+                                if(j)
+                                {
+                                    printf("mimas_send_err % d in %d\n",j, __LINE__);
+                                }
+                                else
+                                {
+                                    printf("sending PWM data to mimas vDev %d\n",j);
+                                }
+                                pwm_d[k].UpdChCount = 0;
+                                pwm_d[k].needUpdate = 0;
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                    {
+
+                    }
                 }
+                break;
             }
-         }
-     upd_pwm|=1;*/
-     usleep(60000ul);
+            case msg_typ_sys_event:
+            {
+                break;
+            }
+            case msg_typ_pwm_cmd:
+            {
+                pwm_cmd_msg_t* msg = (pwm_cmd_msg_t*)pkt;
+                int mrc;
+                if(msg->cmd & pwm_set_gper_cmd)
+                {
+                    if(msg->grp_bm & PWM_GRP_A) {
+                        mrc = mimas_store_pwm_period(PWM_GRP_A, msg->data[0].gper);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                    if(msg->grp_bm & PWM_GRP_B) {
+                        mrc = mimas_store_pwm_period(PWM_GRP_B, msg->data[1].gper);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                }
+                if(msg->cmd & pwm_set_div_cmd)
+                {
+                    if(msg->grp_bm & PWM_GRP_A) {
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_A, msg->data[0].div);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                    if(msg->grp_bm & PWM_GRP_B) {
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_B, msg->data[1].div);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                }
+                if(msg->cmd & pwm_set_gctrl_cmd)
+                {
+                    if(msg->grp_bm & PWM_GRP_A) {
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_A, msg->data[0].gctrl);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                    if(msg->grp_bm & PWM_GRP_B) {
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_B, msg->data[1].gctrl);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                }
+                if(msg->cmd & pwm_set_ch_per_cmd)
+                {
+                    if(msg->grp_bm & PWM_GRP_A) {
+                        mrc = mimas_store_pwm_val(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_pers[msg->start_ch[0]],msg->ch_count[0]);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        }
+                    if(msg->grp_bm & PWM_GRP_B) {
+                        mrc = mimas_store_pwm_val(PWM_GRP_B, msg->start_ch[1],&msg->data[1].ch_pers[msg->start_ch[1]],msg->ch_count[1]);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                }
+                if(msg->cmd & pwm_set_ch_ctrl_cmd)
+                {
+                    if(msg->grp_bm & PWM_GRP_A) {
+                        mrc = mimas_store_pwm_chCntrol(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_ctrls[msg->start_ch[0]],msg->ch_count[0]);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                    if(msg->grp_bm & PWM_GRP_B) {
+                        mrc = mimas_store_pwm_chCntrol(PWM_GRP_B, msg->start_ch[1],&msg->data[1].ch_ctrls[msg->start_ch[1]],msg->ch_count[1]);
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                    }
+                }
+                break;
+            }
+            default:
+            {
+                printf("unknown msg_typ\n");
+            }
+        }
+        usleep(5000ul);
     }while(1);
 }

@@ -11,12 +11,13 @@
 //#define MIN( A , B ) ( ((A>B)?B:A) )
 
 #ifdef      LL_BUFFER
-#define     RQ_DEPTH    (8u * (GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))
+#define     RQ_DEPTH    (8u * (MIMAS_STREAM_OUT_CNT * UNI_PER_OUT))
 #else
 #define     RQ_DEPTH    (512u)
 #endif
 
-#define EV_Q_DEPTH  8192
+#define EV_Q_DEPTH      8192
+#define PWM_Q_DEPTH   32
 
 typedef enum{
     no_msg_e      = -1,
@@ -65,13 +66,10 @@ typedef struct
     pthread_mutex_t 	mux;
 	sem_t               sem;
     uint_fast32_t       collisions;
+    uint_fast32_t 	count __attribute__ ((aligned(64)));
 #else
 #define             IDXMASK ( RQ_DEPTH  - 1u )
 #define             EV_Q_MASK (EV_Q_DEPTH - 1u)
-union{
-	peer_pack_t     *rq;
-	trace_msg_t     *evq;
-	};
 	uint_fast32_t		head __attribute__ ((aligned(64)));
 	uint32_t        _p1[128 - sizeof(uint_fast32_t)];
 	uint_fast32_t		tail __attribute__ ((aligned(64)));
@@ -82,9 +80,18 @@ union{
 	uint_fast32_t		tailStep __attribute__ ((aligned(64)));
 	uint32_t        _p2b[128 - sizeof(uint_fast32_t)];
 
-#endif
 	uint_fast32_t 	count __attribute__ ((aligned(64)));
 	uint32_t        _p3[128 - sizeof(uint_fast32_t)];
+    uint32_t        Q_MSK;
+    uint32_t        slot_sz;
+    union
+    {
+        uint8_t         *genQ;
+        peer_pack_t     *rq;
+        trace_msg_t     *evq;
+    };
+#endif
+
 	pthread_spinlock_t  lock;
 }fl_head_t;
 
@@ -100,8 +107,8 @@ typedef struct
 }post_box_t;
 
 
-post_box_t* createPB(uint32_t count, const char* name, void* rqs);
-void  setDefPB(const post_box_t* pb);
+post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size);
+void setDefPB(const post_box_t* pb);
 void msgWritten(fl_head_t* hd);
 void msgWrittenMulti(fl_head_t* hd, int cnt);
 void msgRead(fl_head_t* hd);

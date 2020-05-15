@@ -30,7 +30,10 @@
 #define DATABYTES (3 * 750)
 #include "mimas_cmd_defs.h"
 #include "mimas_cfg.h"
+#include "utils.h"
 #include <byteswap.h>
+#include <pthread.h>
+
 static int fd = -1;
 int bits=8;
 //uint8_t mimas[8][DATABYTES + 4];
@@ -39,6 +42,82 @@ struct spi_ioc_transfer tr[13];
 struct spi_ioc_transfer tr_pwm;
 static uint8_t start_stream_header[4];
 
+static	pthread_spinlock_t  spilock;
+
+inline static int spi_lock(void)
+{
+    int rc = pthread_spin_lock(&spilock);
+    if(rc)
+    {
+        perror("failed to aquire spilock");
+        return(-1);
+    }
+    mimas_state_t mSt;
+    mSt = mimas_get_state();
+    if( mSt.idle == 1 )
+    {
+        do
+        {
+            mimas_prn_state(&mSt);
+            time_t now;
+            time(&now);
+            struct tm ts = *localtime(&now);
+            char tsbuf[80];
+            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+            MIMAS_RESET
+            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__, __LINE__, tsbuf);
+            bcm2835_delayMicroseconds(10000ull);
+            mSt = mimas_get_state();
+            mimas_prn_state(&mSt);
+        }while(mSt.idle==1);
+        if(mSt.idle)
+        {
+            rc = pthread_spin_unlock(&spilock);
+            if(rc)
+            {
+                perror("failed to leave spilock");
+            }
+            return(-110);
+        }
+    }
+    int loops = 0;
+    while( mSt.sys_rdy == 0 )
+    {
+        if(++loops > 250) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
+        {
+            printf("Mimas stuck badly!\n");
+            mimas_prn_state(&mSt);
+            time_t now;
+            time(&now);
+            struct tm ts = *localtime(&now);
+            char tsbuf[80];
+            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+            MIMAS_RESET
+            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__,__LINE__, tsbuf);
+            bcm2835_delayMicroseconds(10000ull);
+            mSt =mimas_get_state();
+            mimas_prn_state(&mSt);
+            rc = pthread_spin_unlock(&spilock);
+            if(rc)
+            {
+                perror("failed to leave spilock");
+            }
+            return(-100);
+        }
+        bcm2835_delayMicroseconds(100ull);
+        mSt =mimas_get_state();
+     }
+     return 0;
+}
+
+inline static void spi_unlock(void)
+{
+    int rc = pthread_spin_unlock(&spilock);
+    if(rc)
+    {
+        perror("failed to leave spilock");
+    }
+}
 
 static void pabort(const char *s)
 {
@@ -52,37 +131,9 @@ static uint8_t mode;
 static uint32_t speed = 80000000;
 static uint16_t delay;
 
-int transfer( int msg)
-{
-if(fd == -1)return(-1);
-	int ret;
-    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[msg]);
-    if (ret < 1){
-    pabort("can't send spi message");
-    return (-2);
-    }
-return(0);
-}
-
-static void print_usage(const char *prog)
-{
-	printf("Usage: %s [-DsbdlHOLC3]\n", prog);
-	puts("  -D --device   device to use (default /dev/spidev1.1)\n"
-	     "  -s --speed    max speed (Hz)\n"
-	     "  -d --delay    delay (usec)\n"
-	     "  -b --bpw      bits per word \n"
-	     "  -l --loop     loopback\n"
-	     "  -H --cpha     clock phase\n"
-	     "  -O --cpol     clock polarity\n"
-	     "  -L --lsb      least significant bit first\n"
-	     "  -C --cs-high  chip select active high\n"
-	     "  -3 --3wire    SI/SO signals shared\n");
-	exit(1);
-}
-
 int mimas_send_packet(int chan, uint8_t* data, int len)
 {
-return(-5); // obsolete, not supported
+    return(-5); // obsolete, not supported
     if(fd == -1)return(-1);
     if(chan>7)return(-3);
     int ret;
@@ -146,11 +197,7 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
     if((cnt ==0)||(cnt>8)) return(-4);
     if(fd == -1)return(-1);
     int i, ret;
-    //mimas_cmd_hdr_t* hdr = (mimas_cmd_hdr_t*)(&mimas_pwm[0]);
-    //hdr->pwm.opCode = PWM_VAL_ST;
-    //hdr->pwm.chan = chan;
-    //hdr->pwm.group = grp;
-    //hdr->pwm.cnt = cnt;
+
     mimas_pwm[0] = PWM_VAL_ST;
     mimas_pwm[1] = chan;
     mimas_pwm[2] = grp;
@@ -167,14 +214,14 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
         val++;
     }
     tr_pwm.len =4u + (2 * i);
-
+    if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
         return (-5);
     }
-
     return(0);
 }
 
@@ -195,13 +242,14 @@ int mimas_store_pwm_period(uint8_t grp, uint16_t val)
     mimas_pwm[3] = 1;
     *(uint16_t*)&mimas_pwm[4] = val;
     tr_pwm.len = 6u;
+    if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
         return (-5);
     }
-
     return(0);
 }
 
@@ -222,7 +270,9 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
     mimas_pwm[3] = 1;
     mimas_pwm[4] = val;
     tr_pwm.len = 5u;
+    if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
@@ -263,7 +313,9 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
         if(i>7)break;
     }
     tr_pwm.len =4u + j;
+    if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
@@ -288,7 +340,9 @@ Sets pwm group enable
     mimas_pwm[3] = 1;
     mimas_pwm[4] = enabled & 1;
     tr_pwm.len = 5u;
+    if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
@@ -308,7 +362,9 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
     start_stream_header[2]= ((start_bm >> 4) & 0xF0) | (proto_bm >> 8);
     start_stream_header[3]= proto_bm & 0xFF;
     //printf("MIMAS start %X\n", start_bm);
+    if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[8]);
+    spi_unlock();
     if (ret < 1){
     pabort("can't send spi message");
     return (-2);
@@ -329,7 +385,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
 
     uint16_t temp_bm=0;
     uint8_t *ch;
-
+    if(spi_lock()!=0) return(-1000);
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         if((start_bm & BIT32(i))==0)continue;
@@ -361,6 +417,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
         if(temp_bm == 0 )
         {
             printf("ERROR: spi: nothing to send, aborting\n");
+            spi_unlock();
             return(-2);
         }
     }
@@ -370,6 +427,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
     start_stream_header[3] = proto_bm & 0xFF;
    // printf("MIMAS start %X\n", start_bm);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);
+    spi_unlock();
     if (ret < 1)
     {
         pabort("can't send spi message");
@@ -466,9 +524,22 @@ int spi_main(int argc, char *argv[])
 */
 int initSPI(void)
 {
-delay = 1;
-uint8_t cs_change = 0;
-int i, ret;
+    uint8_t cs_change = 0;
+    int i, ret;
+
+    ret = pthread_spin_init(&spilock, PTHREAD_PROCESS_PRIVATE);
+    if(ret)
+    {
+        perror("failed to init spilock");
+        return -1;
+    }
+    ret = pthread_spin_lock(&spilock);
+    if(ret)
+    {
+        perror("failed to aquire spilock during init");
+        return -1;
+    }
+    delay = 1;
     fd = -1;
 	fd = open(device, O_RDWR);
 	if (fd < 0)
@@ -539,6 +610,7 @@ int i, ret;
     tr_pwm.speed_hz = speed;
     tr_pwm.bits_per_word = 8;
     tr_pwm.cs_change = cs_change;
+    pthread_spin_unlock(&spilock);
     printf("Spi init for %d stream devices, mask is %X\n", MIMAS_STREAM_OUT_CNT, MIMAS_STREAM_BM);
 
 
@@ -637,3 +709,32 @@ static void parse_opts(int argc, char *argv[])
 		}
 	}
 }*/
+/*
+int transfer( int msg)
+{
+if(fd == -1)return(-1);
+	int ret;
+    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[msg]);
+    if (ret < 1){
+    pabort("can't send spi message");
+    return (-2);
+    }
+return(0);
+}
+
+static void print_usage(const char *prog)
+{
+	printf("Usage: %s [-DsbdlHOLC3]\n", prog);
+	puts("  -D --device   device to use (default /dev/spidev1.1)\n"
+	     "  -s --speed    max speed (Hz)\n"
+	     "  -d --delay    delay (usec)\n"
+	     "  -b --bpw      bits per word \n"
+	     "  -l --loop     loopback\n"
+	     "  -H --cpha     clock phase\n"
+	     "  -O --cpol     clock polarity\n"
+	     "  -L --lsb      least significant bit first\n"
+	     "  -C --cs-high  chip select active high\n"
+	     "  -3 --3wire    SI/SO signals shared\n");
+	exit(1);
+}
+*/

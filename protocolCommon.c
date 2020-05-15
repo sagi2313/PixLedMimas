@@ -13,12 +13,12 @@ void SmReset(node_t* n, sm_reset_causes_e cause)
 	sm->state = out_of_sync_e;
     sm->startNet = n->art_start_uni;
 
-    int maxUni =(n->universe_count >(GLOBAL_OUTPUTS_MAX * UNI_PER_OUT))?(GLOBAL_OUTPUTS_MAX * UNI_PER_OUT):n->universe_count ;
+    int maxUni =(n->universe_count >(MIMAS_STREAM_OUT_CNT * UNI_PER_OUT))?(MIMAS_STREAM_OUT_CNT * UNI_PER_OUT):n->universe_count ;
 
     maxUni+= (n->art_start_uni  - 1);
     sm->endNet = maxUni;
     sm->universes_count = n->universe_count;
-    sm->min_uni = 255;
+    sm->min_uni = 0xFFFF;
     printf("SM: State Machine reset(%s)\n",  rstcauses[cause]);
 }
 
