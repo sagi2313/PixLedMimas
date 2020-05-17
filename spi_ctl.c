@@ -41,16 +41,33 @@ uint8_t mimas_pwm[20];
 struct spi_ioc_transfer tr[13];
 struct spi_ioc_transfer tr_pwm;
 static uint8_t start_stream_header[4];
-
+uint_fast64_t spin_trycolission=0ul;
+uint_fast64_t spin_blocks=0ul;
+uint_fast64_t spin_hit=0ul;
+uint_fast64_t unlock_sleep;
 static	pthread_spinlock_t  spilock;
 
 inline static int spi_lock(void)
 {
-    int rc = pthread_spin_lock(&spilock);
+    int_fast32_t rc, c;
+    c=0;
+    spin_hit++;
+    do{
+        if(++c>9999)break;
+        rc = pthread_spin_trylock(&spilock);
+    }while(rc);
+    if(c>1)spin_trycolission+=c;
+
     if(rc)
     {
-        perror("failed to aquire spilock");
-        return(-1);
+        spin_blocks++;
+       // printf("spin %llu, block %llu, hits %llu\n",spin_trycolission, spin_blocks, spin_hit);
+        rc = pthread_spin_lock(&spilock);
+        if(rc)
+        {
+            perror("failed to aquire spilock");
+            return(-1);
+        }
     }
     mimas_state_t mSt;
     mSt = mimas_get_state();
@@ -70,7 +87,7 @@ inline static int spi_lock(void)
             mSt = mimas_get_state();
             mimas_prn_state(&mSt);
         }while(mSt.idle==1);
-        if(mSt.idle)
+       /* if(mSt.idle)
         {
             rc = pthread_spin_unlock(&spilock);
             if(rc)
@@ -78,7 +95,7 @@ inline static int spi_lock(void)
                 perror("failed to leave spilock");
             }
             return(-110);
-        }
+        }*/
     }
     int loops = 0;
     while( mSt.sys_rdy == 0 )
@@ -128,7 +145,7 @@ static void pabort(const char *s)
 static const char *device = "/dev/spidev0.0";
 static uint8_t mode;
 //static uint8_t bits = 8;
-static uint32_t speed = 80000000;
+static uint32_t speed = 80000000u;
 static uint16_t delay;
 
 int mimas_send_packet(int chan, uint8_t* data, int len)
@@ -216,6 +233,10 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
     tr_pwm.len =4u + (2 * i);
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    /*
+    unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
+    if(unlock_sleep==0llu)unlock_sleep=1llu;
+    bcm2835_delayMicroseconds(unlock_sleep);*/
     spi_unlock();
     if (ret < 1)
     {
@@ -244,6 +265,9 @@ int mimas_store_pwm_period(uint8_t grp, uint16_t val)
     tr_pwm.len = 6u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
+    if(unlock_sleep==0llu)unlock_sleep=1llu;
+    bcm2835_delayMicroseconds(unlock_sleep);*/
     spi_unlock();
     if (ret < 1)
     {
@@ -272,6 +296,8 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
     tr_pwm.len = 5u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+
+    bcm2835_delayMicroseconds(1llu);
     spi_unlock();
     if (ret < 1)
     {
@@ -315,6 +341,9 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
     tr_pwm.len =4u + j;
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
+    if(unlock_sleep==0llu)unlock_sleep=1llu;
+    bcm2835_delayMicroseconds(unlock_sleep);*/
     spi_unlock();
     if (ret < 1)
     {
@@ -342,6 +371,8 @@ Sets pwm group enable
     tr_pwm.len = 5u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+
+   /* bcm2835_delayMicroseconds(1llu);*/
     spi_unlock();
     if (ret < 1)
     {
@@ -364,6 +395,8 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
     //printf("MIMAS start %X\n", start_bm);
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[8]);
+
+    /*bcm2835_delayMicroseconds(1llu);*/
     spi_unlock();
     if (ret < 1){
     pabort("can't send spi message");
@@ -386,12 +419,14 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
     uint16_t temp_bm=0;
     uint8_t *ch;
     if(spi_lock()!=0) return(-1000);
+    /*unlock_sleep=0llu;*/
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         if((start_bm & BIT32(i))==0)continue;
         if(tr[i].len>0)
         {
             ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[i]);
+            /*unlock_sleep+=tr[i].len;*/
             if (ret < 1)
             {
                 printf("error %d sending pack(%u), len = %u , errno %d\n", ret, i, tr[i].len, errno );
@@ -427,6 +462,9 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
     start_stream_header[3] = proto_bm & 0xFF;
    // printf("MIMAS start %X\n", start_bm);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);
+    /*unlock_sleep /8llu;
+    if(unlock_sleep==0llu)unlock_sleep=1llu;
+    bcm2835_delayMicroseconds(unlock_sleep);*/
     spi_unlock();
     if (ret < 1)
     {
@@ -539,7 +577,7 @@ int initSPI(void)
         perror("failed to aquire spilock during init");
         return -1;
     }
-    delay = 1;
+    delay = 0;
     fd = -1;
 	fd = open(device, O_RDWR);
 	if (fd < 0)

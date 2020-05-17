@@ -6,8 +6,13 @@ mimas_dev_t     mimas_devices;
 vdevs_t         devList;
 
 
-const pwm_cfg_limits_t pwm_def_mimits_c = {.minV = 0u, .midV = 0x7FFF, .maxV = 0xFFFFu };
-const pwm_cfg_t pwm_def_cfg_c={ .lim = {pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c, pwm_def_mimits_c} , .grpCfg.gctrl = 1, .grpCfg._16bits=1, .grpCfg.bswap=1 };
+const pwm_cfg_limits_t pwm_def_limits_c = {.minV = 0u, .midV = 0x7FFF, .maxV = 0xFFFFu };
+const pwm_ch_data_t    pwm_def_chan_c =  {.chV = 0, .lims = pwm_def_limits_c, .chCtrl = 0};
+const pwm_cfg_t pwm_def_cfg_c={ .chCfg =
+       {pwm_def_chan_c, pwm_def_chan_c, pwm_def_chan_c, pwm_def_chan_c,
+       pwm_def_chan_c, pwm_def_chan_c, pwm_def_chan_c, pwm_def_chan_c} ,
+        .ch_count=-1, .hwStartIdx=-1, .com.vDevIdx = -1,
+        .com.dev_type = pwm_dev, .com.start_address = 0xFFFF, .com.end_address = 0};
 
 pwm_out_dev_t* getMimasPwmDevices( void)
 {
@@ -24,16 +29,15 @@ void init_mimas_vdevs(void)
     devList.max_addr = 0;
     devList.next_free_addr= 0;
     memset((void*)&mimas_devices, 0, sizeof(mimas_dev_t));
-    mimas_devices.pwms[0].cfg = pwm_def_cfg_c;
-    mimas_devices.pwms[1].cfg = pwm_def_cfg_c;
-    int i;
-    for(i=0;i<MIMAS_PWM_OUT_PER_GRP_CNT;i++)
+    int i, j;
+    for(j = 0;j<MIMAS_PWM_GROUP_CNT;j++)
     {
-        mimas_devices.pwms[0].ch_data[i].phyGrp = 0;
-        mimas_devices.pwms[0].ch_data[i].phyIdx = i;
-        mimas_devices.pwms[1].ch_data[i].phyGrp = 1;
-        mimas_devices.pwms[1].ch_data[i].phyIdx = i;
-
+        for(i=0;i<MIMAS_PWM_OUT_PER_GRP_CNT;i++)
+        {
+            mimas_devices.pwms[j].ch_data[i] = pwm_def_chan_c;
+            mimas_devices.pwms[j].ch_data[i].phyGrp = j;
+            mimas_devices.pwms[j].ch_data[i].phyIdx = i;
+        }
     }
 }
 int findFreeDevListSlot(void)
@@ -55,17 +59,17 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     uint32_t out_need, res;
     addressing_t tmpAddr;
     int idx;
+    int hwIdx=0;
     idx = findFreeDevListSlot();
     if(idx == -1)return(-1);
 
-    devList.devs[idx].dev_com.start_address = wsdev->com.start_address;
+
     if(wsdev->com.start_address == 0xFFFF)
     {
         wsdev->com.start_address = devList.next_free_addr;
     }
     tmpAddr = wsdev->com.start_address;
 
-    devList.devs[idx].dev_com.dev_type = ws_pix_dev;
     if(wsdev->pixel_count -(uni_need * wsdev->pix_per_uni )>0)
     {
         uni_need++;
@@ -76,8 +80,16 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     {
         out_need++;
     }
-    res = 0;
-
+    for(i=0;i<uni_need;i++)
+    {
+        if(checkfDmxRangeIsFree(tmpAddr+i, 0, 509)==0)
+        {
+            printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
+            return(-5);
+        }
+    }
+    devList.devs[idx].dev_com.dev_type = ws_pix_dev;
+    devList.devs[idx].dev_com.start_address = wsdev->com.start_address;
     devList.devs[idx].sub_dev_cnt = out_need;
     devList.devs[idx].uni_count = uni_need;
     devList.devs[idx].pixel_count =  wsdev->pixel_count;
@@ -88,7 +100,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     {
         if(ws->com.dev_type == unused_dev)
         {
-            devList.devs[idx].pix_devs[res]=  ws;
+            devList.devs[idx].pix_devs[hwIdx]=  ws;
 
             ws->com.start_address = tmpAddr;
             tmpAddr+=UNI_PER_OUT;
@@ -99,7 +111,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
             ws->pixel_count = wsdev->pix_per_uni * UNI_PER_OUT;
             ws->pix_per_uni = wsdev->pix_per_uni;
             out_need--;
-            res++;
+            hwIdx++;
         }
         if(out_need==0)break;
         ws++;
@@ -108,16 +120,22 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     devList.devs[idx].dev_com.end_address = tmpAddr;
     if(devList.max_addr<tmpAddr)devList.max_addr = tmpAddr;
     devList.next_free_addr = tmpAddr+1;
+    tmpAddr = devList.devs[idx].dev_com.start_address;
+    for(i=0;i<uni_need;i++)
+    {
+        addAddrUsage(tmpAddr++,0, 509);
+    }
+
     return(idx);
 }
 
-int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t*  cfg)
+int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
 {
     int idx;
 
     idx = findFreeDevListSlot();
     if(idx == -1)return(-1);
-    volatile int k , i, offset, need,res;
+    volatile int k , i, offset, need,hwIdx;
     pwm_out_dev_t* p;
     addressing_t tmpAddr;
     uint16_t best_choise  = 0;
@@ -126,6 +144,7 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t*  cfg)
     need = pwmdev->ch_count;
     uint16_t tst_bm = BIT16(need)-1u;
     uint16_t t;
+    uint16_t free_dmx;
     free_bm =~( (uint16_t)(mimas_devices.pwms[0].usage_bm) | (uint16_t)(mimas_devices.pwms[1].usage_bm<<8));
 
 
@@ -155,113 +174,74 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t*  cfg)
     {
         return(-2);
     }
-    devList.devs[idx].dev_com = pwmdev->com;
+    //devList.devs[idx].dev_com = pwmdev->com;
     if(pwmdev->com.start_address == 0xFFFF)
     {
-        pwmdev->com.start_address = devList.next_free_addr;
+        pwmdev->com.start_address = devList.next_free_addr;// artnet address
         devList.next_free_addr++;
     }
-    tmpAddr = pwmdev->com.start_address;
-    offset = pwmdev->com.start_offset;
-    devList.devs[idx].dev_com.vdevIdx = idx;
+
+    devList.devs[idx].dev_com.vDevIdx = idx;
     devList.devs[idx].dev_com.dev_type = pwm_dev;
+    devList.devs[idx].chann_count = pwmdev->ch_count;
+    devList.devs[idx].sub_dev_cnt = 1; /*init at 0, update during allocation */
+    devList.devs[idx].uni_count = 1;
+    devList.devs[idx].pwm_vdev = (pwm_vdev_t*)malloc(sizeof(pwm_vdev_t));
+
+    tmpAddr = pwmdev->com.start_address;
     devList.devs[idx].dev_com.start_address = tmpAddr;
     devList.devs[idx].dev_com.end_address = tmpAddr;
-    devList.devs[idx].chann_count = pwmdev->ch_count;
     if(tmpAddr<devList.min_addr)devList.min_addr = tmpAddr;
     if(tmpAddr>devList.max_addr)devList.max_addr = tmpAddr;
 
-    devList.devs[idx].sub_dev_cnt = 0; /*init at 0, update during allocation */
-    devList.devs[idx].uni_count = 1;
-    devList.devs[idx].pwm_vdev = (pwm_vdev_t*)malloc(sizeof(pwm_vdev_t));
-    devList.devs[idx].pwm_vdev->chan_data = (pwm_ch_data_t*)calloc(need, sizeof(void*));
-    devList.devs[idx].pwm_vdev->lims = (pwm_cfg_limits_t*)calloc(need, sizeof(void*));
+
+    if(pwmdev->com.start_offset == 0xFFFF)
+    {
+        // findNextFree DMX, write it back to pwmdev->com.start_offset
+        offset = getNextFreeChAtAddr(tmpAddr);
+    }
+    else
+    {
+        k = checkfDmxChIsFree(tmpAddr, pwmdev->com.start_offset);
+        if(k==0)
+        {
+            offset = getNextFreeChAtAddr(tmpAddr);
+        }
+        else
+        {
+            offset = pwmdev->com.start_offset;
+        }
+    }
+
     devList.devs[idx].pwm_vdev->com.dev_type = pwm_dev;
-    devList.devs[idx].pwm_vdev->com.start_address = offset;
-    devList.devs[idx].sub_dev_cnt = 1;
+    devList.devs[idx].pwm_vdev->com.vDevIdx = idx;
+    devList.devs[idx].pwm_vdev->com.start_address = tmpAddr;
+    devList.devs[idx].pwm_vdev->com.end_address  = tmpAddr;
+    devList.devs[idx].pwm_vdev->com.start_offset = offset;
+    devList.devs[idx].pwm_vdev->hwStartIdx = best_start_idx;
     k = best_start_idx%MIMAS_PWM_OUT_PER_GRP_CNT;
     for(i=0;i<best_choise;i++)
     {
-        res = k & (BIT16(MIMAS_PWM_OUT_PER_GRP_CNT) - 1u);
+        hwIdx = k & (BIT16(MIMAS_PWM_OUT_PER_GRP_CNT) - 1u);
         p = &mimas_devices.pwms[ (i+ best_start_idx)/MIMAS_PWM_OUT_PER_GRP_CNT];
-        if(p->com.dev_type == unused_dev)
-        {
-            p->com.dev_type = pwm_dev;
-        }
         if(cfg!=NULL)
         {
-            p->cfg.lim[res] = cfg->lim[i];
-            p->cfg.grpCfg.bswap = cfg->grpCfg.bswap;
-            p->cfg.grpCfg._16bits = cfg->grpCfg._16bits;
+            p->ch_data[hwIdx].lims = cfg->chCfg[i].lims;
+            t = p->ch_data[hwIdx].chCtrl & 0xf;
+            p->ch_data[hwIdx].chCtrl = ((cfg->chCfg[i].chCtrl & 0xF0) | t);
         }
-        p->ch_data[res].bswap = p->cfg.grpCfg.bswap;
-        p->ch_data[res]._16bits = p->cfg.grpCfg._16bits;
-        devList.devs[idx].pwm_vdev->chan_data[i] = &p->ch_data[res];
-        devList.devs[idx].pwm_vdev->lims[i] = &p->cfg.lim[res];
-        p->usage_bm|=BIT8(res);
+        p->usage_bm|=BIT8(hwIdx);
 
-        offset+=p->cfg.grpCfg._16bits?2:1;
+        offset+=p->ch_data[hwIdx]._16bits?2:1;
         devList.devs[idx].pwm_vdev->ch_count++;
         k++;
     }
     offset--;
-    devList.devs[idx].pwm_vdev->com.end_address = offset;
-    if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
+    devList.devs[idx].pwm_vdev->com.end_offset = offset;
     *pwmdev = *devList.devs[idx].pwm_vdev;
-    return(idx);
-    // old code that finds as many free channels as possible even if they are not consequent
-    for(i=0;i<MIMAS_PWM_GROUP_CNT;i++)
-    {
-        devList.devs[idx].sub_dev_cnt++;
-        p = &mimas_devices.pwms[i];
-        if(p->usage_bm!=0xFF)
-        {
-            if(p->com.dev_type == unused_dev)
-            {
-                p->com.dev_type = pwm_dev;
-            }
-            int j, k, m;
-            m = 1;
-            /* try to find free channels*/
-            for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
-            {
-                if((p->usage_bm & m) == 0)
-                {
-                    need--;
-                    if(cfg!=NULL)
-                    {
-                        p->cfg.lim[k] = cfg->lim[res];
-                    }
-                    devList.devs[idx].pwm_vdev->chan_data[res++] = &p->ch_data[k];
-                    p->usage_bm|=BIT8(k);
-                    devList.devs[idx].pwm_vdev->com.dev_type = pwm_dev;
-                    devList.devs[idx].pwm_vdev->com.start_address = tmpAddr;
-                    offset+=p->cfg.grpCfg._16bits?2:1;
-                    devList.devs[idx].pwm_vdev->ch_count++;
-                }
-                if(need==0)break;
-                m<<=1;
-            }
-        }
-        if(need==0)break;
-    }
-    pwmdev->com.start_offset = offset;// autoupdate offset to next free(?) dmx channel
-
-    /*
-    for(i=0;i<16;i++)
-    {
-        printf("free %d, need %d , and at %d:%d\n", \
-        __builtin_popcount(free_bm),__builtin_popcount(tst_bm) ,i,__builtin_popcount(free_bm & tst_bm));
-        if(( free_bm & tst_bm) == tst_bm)break;
-        if( (free_bm & tst_bm) < best_choise )
-        {
-            best_start_idx = i;
-            best_choise = ( free_bm & tst_bm) ;
-        }
-        tst_bm<<=1;
-    }
-*/
-
+    pwmdev->com.end_offset = offset;
+    if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
+    addAddrUsage(devList.devs[idx].dev_com.start_address,pwmdev->com.start_offset, pwmdev->com.end_offset);
     return(idx);
 }
 /*
@@ -351,70 +331,29 @@ peer = (peer>>=16) & 0xFFFFFFFFul;
     }
 }
 
-int getPwmCfg(pwm_vdev_t* vDev, uint8_t ch, pwm_cfg_t** cfg)
-{
-    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
-    pwm_out_dev_t* pt = GET_PWMS_PTR;
-    if(pt!=NULL)
-    {
-       *cfg = &(pt[vDev->chan_data[ch]->phyGrp].cfg);
-       return(0);
-    }
-    else
-    {
-        *cfg = NULL;
-        return(-1);
-    }
-}
-
-int setPwmLimCfg(pwm_vdev_t* vDev, uint8_t ch, pwm_cfg_t* cfg)
-{
-    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
-    pwm_out_dev_t* pt = GET_PWMS_PTR;
-    if(pt!=NULL)
-    {
-       //pt[vDev->chan_data[ch]->phyGrp].cfg.lim[vDev->chan_data[ch]->phyIdx] = cfg->lim[ch];
-       *vDev->lims[ch] = cfg->lim[ch];
-       return(0); // success
-    }
-    return(-1); // internal error
-}
-
-int setPwmVal(pwm_vdev_t* vDev, uint8_t ch, uint16_t val)
-{
-    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
-    vDev->chan_data[ch]->chV = val;
-    return(0);
-}
 
 uint16_t pwmMapValue(pwm_vdev_t* vDev, uint8_t ch, uint8_t* val)
 {
     if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
     uint32_t tv;
-    if(vDev->chan_data[ch]->_16bits!=0)
+    int chId = (vDev->hwStartIdx + ch);
+    pwm_out_dev_t* p = &GET_PWMS_PTR[chId/MIMAS_PWM_OUT_PER_GRP_CNT];
+    chId%=MIMAS_PWM_OUT_PER_GRP_CNT;
+    if(p->ch_data[chId]._16bits!=0)
     {
-        if(vDev->chan_data[ch]->bswap) tv = bswap_16(*val);
+        if(p->ch_data[chId].bswap) tv = bswap_16(*(uint16_t*)val);
         else  tv = *val;
     }
     else
     {
         tv = ((uint16_t)(*val)) *256;
     }
-    tv *= (uint32_t)(vDev->lims[ch]->maxV - vDev->lims[ch]->minV);
+    uint16_t ulim = p->ch_data[chId].lims.maxV;
+    if(ulim>p->gperiod)ulim = p->gperiod;
+    tv *= (uint32_t)(ulim - p->ch_data[chId].lims.minV);
     tv/=0xFFFF;
-    tv+=vDev->lims[ch]->minV;
+    tv+=p->ch_data[chId].lims.minV;
     return((uint16_t)tv);
-}
-
-inline int8_t getPwmGrp(pwm_vdev_t* vDev, uint8_t ch)
-{
-   if(vDev->com.dev_type!=pwm_dev)return(-1);
-   return(vDev->chan_data[ch]->phyGrp);
-}
-inline int8_t getPwmIdx(pwm_vdev_t* vDev, uint8_t ch)
-{
-   if(vDev->com.dev_type!=pwm_dev)return(-1);
-   return(vDev->chan_data[ch]->phyIdx);
 }
 
 void initServo(servo_t* s)
@@ -441,3 +380,220 @@ uint16_t servoGetPwmV(servo_t*s, uint16_t p)
     }
     return(r);
 }
+
+int checkDmxCollission(ln_t lst, uint16_t Start,  uint16_t End)
+{
+    dmx_chan_range_t* rng;
+    while(lst)
+    {
+        rng = (dmx_chan_range_t*)lst->data;
+        if (
+            (Start>=rng->Start) && (Start <= rng->Start) ||
+            (End>=rng->Start) && (End <= rng->Start)
+        )return(1); //collision
+        lst =lst->nxt;
+    }
+    return(0); //ok
+}
+
+int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end)
+{
+    ln_t node;
+    dmx_chan_usage_t *AddrNode;
+    dmx_chan_range_t  *DmxNode = (dmx_chan_range_t  *)malloc( sizeof(dmx_chan_range_t));
+    DmxNode->End = end;
+    DmxNode->Start = start;
+
+    node = findItem(devList.addr_usage, (void*)&artAdr, sizeof(addressing_t), 0);
+    if(node)
+    {
+        AddrNode = (dmx_chan_usage_t *)node->data;
+        int col = checkDmxCollission(AddrNode->ranges, start, end);
+        if(col)
+        {
+            free(DmxNode);
+            return(1); //error
+        }
+        addItem(&AddrNode->ranges, DmxNode);
+    }
+    else
+    {
+        AddrNode = (dmx_chan_usage_t*)malloc(sizeof(dmx_chan_usage_t));
+        addItem(&devList.addr_usage,AddrNode);
+        AddrNode->address = artAdr;
+        AddrNode->items=0;
+        AddrNode->ranges=NULL;
+        AddrNode->nxt_free=0;
+       // node = addItem(devList.addr_usage,AddrNode);
+        addItem(&AddrNode->ranges,DmxNode);
+
+    }
+
+    AddrNode->items++;
+    AddrNode->nxt_free=end+1;
+    return(0); //success
+}
+
+uint16_t getNextFreeChAtAddr(addressing_t adr)
+{
+    if(devList.addr_usage == NULL)return(0);
+    ln_t node;
+    node = findItem(devList.addr_usage, (void*)&adr, sizeof(addressing_t), 0);
+    if(node == NULL)return(0);
+    dmx_chan_usage_t *AddrNode = (dmx_chan_usage_t *)node->data;
+    return(AddrNode->nxt_free);
+}
+
+
+/* return 0 if address is NOT free, otherwise 1 */
+int checkfDmxChIsFree(addressing_t adr, uint16_t chan)
+{
+    if(devList.addr_usage == NULL)return(1);
+    ln_t node;
+    node = findItem(devList.addr_usage, (void*)&adr, sizeof(addressing_t), 0);
+    if(node == NULL)return(1);
+    dmx_chan_usage_t *AddrNode = (dmx_chan_usage_t *)node->data;
+    return(!checkDmxCollission( AddrNode->ranges, chan, chan));
+}
+
+/* return 0 if address range is NOT free, otherwise 1 */
+int checkfDmxRangeIsFree(addressing_t adr, uint16_t Start, uint16_t End)
+{
+    if(devList.addr_usage == NULL)return(1);
+    ln_t node;
+    node = findItem(devList.addr_usage, (void*)&adr, sizeof(addressing_t), 0);
+    if(node == NULL)return(1);
+    dmx_chan_usage_t *AddrNode = (dmx_chan_usage_t *)node->data;
+    return(!checkDmxCollission( AddrNode->ranges, Start, End));
+}
+
+/*
+int getPwmCfg(pwm_vdev_t* vDev, uint8_t ch, pwm_cfg_t** cfg)
+{
+    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
+    pwm_out_dev_t* pt = GET_PWMS_PTR;
+    if(pt!=NULL)
+    {
+       *cfg = &(pt[vDev->chan_data[ch]->phyGrp].cfg);
+       return(0);
+    }
+    else
+    {
+        *cfg = NULL;
+        return(-1);
+    }
+}
+*/
+/*
+int setPwmLimCfg(pwm_vdev_t* vDev, uint8_t ch, pwm_cfg_t* cfg)
+{
+    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
+    pwm_out_dev_t* pt = GET_PWMS_PTR;
+    if(pt!=NULL)
+    {
+       //pt[vDev->chan_data[ch]->phyGrp].cfg.lim[vDev->chan_data[ch]->phyIdx] = cfg->lim[ch];
+       *vDev->lims[ch] = cfg->lim[ch];
+       return(0); // success
+    }
+    return(-1); // internal error
+}
+*/
+/*
+int setPwmVal(pwm_vdev_t* vDev, uint8_t ch, uint16_t val)
+{
+    if(vDev->com.dev_type!=pwm_dev)return(-2); // error wrong vDev type
+    vDev->chan_data[ch]->chV = val;
+    return(0);
+}
+*/
+/*
+inline int8_t getPwmGrp(pwm_vdev_t* vDev, uint8_t ch)
+{
+   if(vDev->com.dev_type!=pwm_dev)return(-1);
+   return(vDev->chan_data[ch]->phyGrp);
+}
+inline int8_t getPwmIdx(pwm_vdev_t* vDev, uint8_t ch)
+{
+   if(vDev->com.dev_type!=pwm_dev)return(-1);
+   return(vDev->chan_data[ch]->phyIdx);
+}
+*/
+
+/*
+void makeDmxBM(uint16_t start,  uint16_t end, dmx_chan_usage_t* n)
+{
+    uint8_t* pt = &n->bm[start/8];
+    if(start == end)
+    {
+        *pt|=1<< start%8;
+        return;
+    }
+    uint16_t cnt = end-start+1;
+    uint8_t  msk = 1<< start%8;
+    while(cnt)
+    {
+        while( msk )
+        {
+            *pt|=msk;
+            msk<<=1;
+            if(--cnt == 0 )break;
+        }
+        msk=1;
+        pt++;
+    }
+}
+
+void addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end)
+{
+
+    dmx_chan_usage_t node;
+    node.address = artAdr;
+    makeDmxBM(start,end,&node);
+    ln_t item = findItem(devList.addr_usage,&node, sizeof(addressing_t), 0);
+    if(item)
+    {
+        //check existing usage, and merge or fail
+        dmx_chan_usage_t node2 = *(dmx_chan_usage_t*)item->data;
+        uint8_t  *pt1,*pt2;
+        pt1 = &node2.bm[start/8];
+        *pt1 &= ~(BIT8(start%8)-1u);
+        pt2 = &node.bm[start/8];
+        uint16_t bcnt = end-start+1;
+        uint16_t at= start ;
+        if(end%8)bcnt--;
+        if(start%8)
+        {
+            if(*pt2 & *pt1)return;
+            at+= (8-(start%8));
+            bcnt--;
+            pt1++;
+            pt2++;
+        }
+        while(bcnt)
+        {
+            if(*pt2 & *pt1)
+            {
+                return;
+            }
+            bcnt--;
+            pt1++;
+            pt2++;
+            at+=8;
+        };
+        if(end>at)
+        {
+            if(*pt1 & *pt2)return;
+        }
+        dmx_chan_usage_t* upd = (dmx_chan_usage_t*)item->data;
+        for(at=start/8;at< 1+(end/8);at++)
+        {
+            upd->bm[at]|= node.bm[at];
+        }
+    }
+    else
+    {
+        item = addItem(devList.addr_usage, &node);
+        if(devList.addr_usage==NULL)devList.addr_usage = item;
+    }
+}
+*/

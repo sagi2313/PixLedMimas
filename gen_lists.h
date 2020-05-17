@@ -10,8 +10,8 @@ typedef struct _lnode_t
 }lnode_t;
 
 
-ln_t addItem(ln_t head, void* item);
+ln_t addItem(ln_t *head, void* item);
 
-int remItem(ln_t head, void* item);
-
+int remItem(ln_t *head, void* item);
+ln_t findItem(ln_t n, void* item, int len, int offset);
 #endif // GEN_LISTS_H_INCLUDED
