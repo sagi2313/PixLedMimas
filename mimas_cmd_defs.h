@@ -5,9 +5,7 @@
 #define PWM_G_CTRL_ST   0x20
 #define STREAM_START    0x80
 #define STREAM_PKT_SEND 0x08
-#define PWM_GRP_A       1
-#define PWM_GRP_B       2
-#define PWM_GRP_ALL     (PWM_GRP_A | PWM_GRP_B)
+
 #pragma pack(1)
 typedef struct
 {

@@ -314,7 +314,7 @@ Sets pwm enable and invert
         and bit1 for access to second pwm group
     chan is the channel select, and it works as channel id. Valid is 0 through 7.
     enabled is a pointer to array of 8bit values to be assigned to channels starting from "chan" up to chan+cnt.
-    in each byte bit0 controls enable flag and bit1 controls invert. Bit0  = 1 -> enable, Bit0 = 1 -> invert
+    in each byte bit0 controls enable flag and bit1 controls invert. Bit0  = 1 -> enable, Bit1 = 1 -> invert
     cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
 */
 int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt)
@@ -330,11 +330,10 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
     mimas_pwm[3] = cnt;
     uint8_t* p = &mimas_pwm[4];
     j = 0;
-    for(i=chan;i<cnt;i++)
+    for(i=0;i<cnt;i++)
     {
-        *p = (*enabled) & 3;
+        *p = enabled[i] &3;
         p++;
-        enabled++;
         j++;
         if(i>7)break;
     }

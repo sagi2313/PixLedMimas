@@ -141,14 +141,79 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     uint16_t best_choise  = 0;
     uint16_t best_start_idx = 0;
     uint16_t free_bm;
-    need = pwmdev->ch_count;
-    uint16_t tst_bm = BIT16(need)-1u;
+
+    if(need<1)return(-2);
+    need = cfg->ch_count;
+    uint16_t tst_bm;
+    uint8_t startS, endS;
     uint16_t t;
     uint16_t free_dmx;
-    free_bm =~( (uint16_t)(mimas_devices.pwms[0].usage_bm) | (uint16_t)(mimas_devices.pwms[1].usage_bm<<8));
+//if request is for any group, hwChannel request is ignored
+    if( (cfg->hwGrpIdx == PWM_GRP_ALL)||(cfg->hwGrpIdx == 0) )
+    {
+        tst_bm = BIT16(need)-1u;
+        free_bm =~( (uint16_t)(mimas_devices.pwms[0].usage_bm) | (uint16_t)(mimas_devices.pwms[1].usage_bm<<8));
+        startS = 0;
+        endS = 16;
+    }
+    else
+    {
+        if(need>8)need = 8;
+        tst_bm = BIT16(need)-1u;
+        if(cfg->hwStartIdx == -1) // means autoselect hwChannel, in requested group
+        {
+            switch(cfg->hwGrpIdx)
+            {
+                case PWM_GRP_A:
+                {
+                    free_bm =~( (uint16_t)(mimas_devices.pwms[0].usage_bm) | 0xFF00);
+                    startS = 0;
+                    endS = 8;
+                    break;
+                }
+                case PWM_GRP_B:
+                {
+                    startS = MIMAS_PWM_OUT_PER_GRP_CNT;
+                    endS = startS + MIMAS_PWM_OUT_PER_GRP_CNT;
+                    tst_bm  <<= MIMAS_PWM_OUT_PER_GRP_CNT;
+                    free_bm = (uint16_t)(mimas_devices.pwms[1].usage_bm);
+                    free_bm <<= MIMAS_PWM_OUT_PER_GRP_CNT;
+                    free_bm|=(BIT16(startS) - 1u);
+                    free_bm =~(free_bm);
+                    break;
+                }
+            }
+        }
+        else // requested specific hwStart Channel
+        {
+            tst_bm<<=cfg->hwStartIdx;
+            switch(cfg->hwGrpIdx)
+            {
+                case PWM_GRP_A:
+                {
+                    free_bm =( (uint16_t)(mimas_devices.pwms[0].usage_bm) | 0xFF00);
+                    if(tst_bm & free_bm)return(-3);
+                    best_start_idx = cfg->hwStartIdx;
+                    tst_bm = 0;
+                    break;
+                }
+                case PWM_GRP_B:
+                {
+                    tst_bm <<= MIMAS_PWM_OUT_PER_GRP_CNT;
+                    free_bm =( (uint16_t)(mimas_devices.pwms[1].usage_bm) | 0x00FF);
+                    if(tst_bm & free_bm)return(-4);
+                    best_start_idx = cfg->hwStartIdx + MIMAS_PWM_OUT_PER_GRP_CNT;
+                    tst_bm = 0;
+                    break;
+                }
+            }
+            startS = 0;
+            endS = 0;
+            best_choise = need;
+        }
+    }
 
-
-    for(i=0;i< MIMAS_PWM_OUT_CNT;i++)
+    for(i=startS;i < endS;i++)
     {
         t = free_bm & tst_bm;
         t>>=i;
@@ -169,47 +234,53 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
             best_start_idx = i;
         }
         tst_bm<<=1;
+        if(tst_bm == 0)break;
     }
     if(best_choise==0)
     {
         return(-2);
     }
     //devList.devs[idx].dev_com = pwmdev->com;
-    if(pwmdev->com.start_address == 0xFFFF)
+    //if(pwmdev->com.start_address == 0xFFFF)
+    if(cfg->com.start_address == 0xFFFF)
     {
-        pwmdev->com.start_address = devList.next_free_addr;// artnet address
+        tmpAddr = devList.next_free_addr;// artnet address
         devList.next_free_addr++;
+    }
+    else
+    {
+        tmpAddr = cfg->com.start_address;
     }
 
     devList.devs[idx].dev_com.vDevIdx = idx;
     devList.devs[idx].dev_com.dev_type = pwm_dev;
-    devList.devs[idx].chann_count = pwmdev->ch_count;
+    devList.devs[idx].chann_count = cfg->ch_count;
     devList.devs[idx].sub_dev_cnt = 1; /*init at 0, update during allocation */
     devList.devs[idx].uni_count = 1;
     devList.devs[idx].pwm_vdev = (pwm_vdev_t*)malloc(sizeof(pwm_vdev_t));
 
-    tmpAddr = pwmdev->com.start_address;
     devList.devs[idx].dev_com.start_address = tmpAddr;
     devList.devs[idx].dev_com.end_address = tmpAddr;
     if(tmpAddr<devList.min_addr)devList.min_addr = tmpAddr;
     if(tmpAddr>devList.max_addr)devList.max_addr = tmpAddr;
 
 
-    if(pwmdev->com.start_offset == 0xFFFF)
+    //if(pwmdev->com.start_offset == 0xFFFF)
+    if(cfg->com.start_offset == 0xFFFF)
     {
         // findNextFree DMX, write it back to pwmdev->com.start_offset
         offset = getNextFreeChAtAddr(tmpAddr);
     }
     else
     {
-        k = checkfDmxChIsFree(tmpAddr, pwmdev->com.start_offset);
+        k = checkfDmxChIsFree(tmpAddr, cfg->com.start_offset);
         if(k==0)
         {
             offset = getNextFreeChAtAddr(tmpAddr);
         }
         else
         {
-            offset = pwmdev->com.start_offset;
+            offset = cfg->com.start_offset;
         }
     }
 
@@ -240,8 +311,10 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     devList.devs[idx].pwm_vdev->com.end_offset = offset;
     *pwmdev = *devList.devs[idx].pwm_vdev;
     pwmdev->com.end_offset = offset;
+    cfg->com.dev_type = pwm_dev;
+    cfg->com.vDevIdx = idx;
     if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
-    addAddrUsage(devList.devs[idx].dev_com.start_address,pwmdev->com.start_offset, pwmdev->com.end_offset);
+    addAddrUsage(devList.devs[idx].dev_com.start_address,devList.devs[idx].pwm_vdev->com.start_offset, offset);
     return(idx);
 }
 /*

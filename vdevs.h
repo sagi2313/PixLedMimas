@@ -68,18 +68,11 @@ typedef struct
     pwm_cfg_limits_t    lims;
     union
     {
-        uint8_t         chCtrl;
+        uint8_t     chCtrl;
         struct
         {
-            //union
-           // {
-            //    uint8_t phy:4;
-          //      struct
-           //     {
-                    uint8_t phyIdx:3;
-                    uint8_t phyGrp:1;
-          //      };
-          //  };
+            uint8_t phyIdx:3;
+            uint8_t phyGrp:1;
             uint8_t enabled:1;
             uint8_t reversed:1;
             uint8_t _16bits:1;
@@ -92,8 +85,9 @@ typedef struct
 typedef struct
 {
     vdev_common_t       com;
+    int8_t              hwGrpIdx:MIMAS_PWM_GROUP_CNT+1;
+    int8_t              hwStartIdx:4;
     int8_t              ch_count;
-    int8_t              hwStartIdx;
     pwm_ch_data_t       chCfg[MIMAS_PWM_OUT_PER_GRP_CNT];
 }pwm_cfg_t;
 

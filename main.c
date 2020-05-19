@@ -191,34 +191,27 @@ void make_a_dev()
     int res, i;
     pwm_cfg_t cfg;
     pwm_vdev_t pdev;
-    pdev.com.start_address = 57;
-    pdev.com.start_offset = 0;
-    pdev.ch_count = 3;
-    for(i=0;i<pdev.ch_count;i++)
+    cfg.com.start_address = 57;
+    cfg.com.start_offset = 0;
+    cfg.ch_count = 4;
+    cfg.hwGrpIdx = PWM_GRP_A;
+    cfg.hwStartIdx= 0;
+    for(i=0;i<cfg.ch_count;i++)
     {
         cfg.chCfg[i].lims.minV = 1450u;//9000u;
         cfg.chCfg[i].lims.maxV = 6500u;//26000u;
         cfg.chCfg[i].chCtrl = PWM_CH_EN |  PWM_CH_16B | PWM_CH_BSW;
     }
-    cfg.chCfg[2].lims = pwm_def_limits_c;
-    cfg.chCfg[3].chCtrl = PWM_CH_EN |  PWM_CH_16B | PWM_CH_BSW;
-
     res = build_dev_pwm(&pdev, &cfg);
-    pdev.com.start_address = 57;
-/*
-    pdev.ch_count = 1;
+    cfg.com.start_address = 57;
+    cfg.com.start_offset = 0;
+    cfg.ch_count = 2;
+    cfg.hwGrpIdx = PWM_GRP_B;
+    cfg.hwStartIdx=0;
     cfg.chCfg[0].lims = pwm_def_limits_c;
     cfg.chCfg[0].chCtrl = PWM_CH_EN |  PWM_CH_16B | PWM_CH_BSW;
-    res = build_dev_pwm(&pdev, &cfg);*/
-/*    pdev.ch_count = 12;
-    cfg.chCfg[0].lims = pwm_def_limits_c;
-    cfg.chCfg[0].lims.maxV = 26000u;
+    cfg.chCfg[0].lims.midV = 10;
     res = build_dev_pwm(&pdev, &cfg);
-prnDev(res);*/
-    //pdev.ch_count = 2;
-   // build_dev_pwm(&pdev);
-   // build_dev_pwm(&pdev);
-   // build_dev_pwm(&pdev);
 
     ws_pix_vdev_t   vd;
     vd.pixel_count = 1500;
@@ -1260,7 +1253,7 @@ int main(void)
         rc = sock_bind(sock_sec, "wlan0",&sec_ip, ARTNET_PORT);
     }
 */
-
+#define PWM_SLEEP_TM 100000u
 
 void pmwTest()
 {
@@ -1280,16 +1273,26 @@ void pmwTest()
     gen_addres_u    raw_addr;
     pwm_vdev_t *cdev;
 
-    for(j=0;j<MIMAS_PWM_GROUP_CNT;j++)
+
+    pwm_d[0].gctrl =1;
+    pwm_d[0].div = 39u;
+    pwm_d[0].gper = 59999u;
+    for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
     {
-        pwm_d[j].gctrl =1;
-        pwm_d[j].div = 39u;
-        pwm_d[j].gper = 39999u;
-        for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
-        {
-            pwm_d[j].ch_pers[k] = 4375;
-            pwm_d[j].ch_ctrls[k] = 1;
-        }
+        pwm_d[0].ch_pers[k] = 4375;
+        pwm_d[0].ch_ctrls[k] = 1;
+        pwm_d[0].sleep_time[k]  =  PWM_SLEEP_TM;
+        pwm_d[0].sleep_count[k] =  PWM_SLEEP_TM;
+    }
+    pwm_d[1].gctrl =1;
+    pwm_d[1].div = 2u;
+    pwm_d[1].gper = 0xFFFF;
+    for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
+    {
+        pwm_d[1].ch_pers[k] = 16384u;
+        pwm_d[1].ch_ctrls[k] = 1;
+        pwm_d[1].sleep_time[k]  =  12* PWM_SLEEP_TM;
+        pwm_d[1].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_msg.mtyp = msg_typ_pwm_cmd;
     pwm_msg.cmd = ALL_PWM_CMDS;
@@ -1313,7 +1316,49 @@ void pmwTest()
             rc = getCopyMsg(&pb->rq_head, pkt);
             //pkt = getMsg(& (*pb).rq_head);
             //if(pkt == NULL)usleep(10);
-            if(rc<0)usleep(100);
+            if(rc<0)
+            {
+                memset(&pwm_msg,0,sizeof(pwm_cmd_msg_t));
+                pwm_msg.cmd  = pwm_set_ch_ctrl_cmd;
+                pwm_msg.mtyp = msg_typ_pwm_cmd;
+                for(j=0;j<MIMAS_PWM_GROUP_CNT;j++){   pwm_msg.start_ch[j]=0xff;}
+                for(j=0;j<MIMAS_PWM_GROUP_CNT;j++)
+                {
+                    for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
+                    {
+                        if(pwm_d[j].sleep_count[k]==0)
+                        {
+                            if(pwm_d[j].sleep_time[k]!=0)
+                            {
+                                if (pwm_d[j].ch_ctrls[k] !=0)
+                                {
+                                    if(pwm_msg.start_ch[j]==0xff)
+                                    {
+                                        pwm_msg.start_ch[j] = k;
+                                        pwm_msg.ch_count[j] = 0;
+                                    }
+                                    pwm_msg.ch_count[j]++;
+                                    pwm_d[j].sleep_count[k] = pwm_d[j].sleep_time[k];
+                                    pwm_d[j].ch_ctrls[k] = 0;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            pwm_d[j].sleep_count[k]--;
+                        }
+                    }
+                    if(pwm_msg.start_ch[j]!=0xff) pwm_msg.grp_bm|=BIT8(j);
+                }
+                if((pwm_msg.start_ch[0]!=0xFF) || (pwm_msg.start_ch[1]!=0xFF))
+                {
+                    post_msg(&pb->rq_head,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
+                }
+                else
+                {
+                    usleep(100);
+                }
+            }
         //}while(pkt == NULL);
         }while(rc<0);
         clock_gettime(CLOCK_REALTIME, &ts[0]);
@@ -1330,9 +1375,6 @@ void pmwTest()
                 {
                     case OpDmx:
                     {
-
-
-
 
                         raw_addr.anet = dat->ArtDmxOut.a_net;
                         devCnt = findVDevsAtAddr(raw_addr.addr, &devIdx);
@@ -1366,6 +1408,8 @@ void pmwTest()
                                         }
                                         pwm_d[cd->phyGrp].ch_pers[cd->phyIdx] = tVal;
                                         pwm_d[cd->phyGrp].UpdChCount++;
+                                        pwm_d[cd->phyGrp].ch_ctrls[cd->phyIdx] = 1;
+                                        pwm_d[cd->phyGrp].sleep_count[cd->phyIdx] = pwm_d[cd->phyGrp].sleep_time[cd->phyIdx];
                                         //printf("Dev %d, ch %d inV %u outV %u\n", k, j, bswap_16(*(uint16_t*)datapt), tVal);
                                     }
                                     //setPwmVal(cdev->pwm_vdev , j, datapt);
@@ -1382,8 +1426,13 @@ void pmwTest()
                             {
                                 j = mimas_store_pwm_val( \
                                                 BIT8(k), \
-                                                pwm_d[k].startUpdIdx \
-                                                ,&pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
+                                                pwm_d[k].startUpdIdx, \
+                                                &pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
+                                                pwm_d[k].UpdChCount);
+
+                                j = mimas_store_pwm_chCntrol(BIT8(k), \
+                                                pwm_d[k].startUpdIdx, \
+                                                &pwm_d[k].ch_ctrls[pwm_d[k].startUpdIdx], \
                                                 pwm_d[k].UpdChCount);
                                 if(j)
                                 {
@@ -1478,6 +1527,7 @@ void pmwTest()
                 if(msg->cmd & pwm_set_ch_ctrl_cmd)
                 {
                     if(msg->grp_bm & PWM_GRP_A) {
+                        //mrc = mimas_store_pwm_chCntrol(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_ctrls[msg->start_ch[0]],msg->ch_count[0]);
                         mrc = mimas_store_pwm_chCntrol(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_ctrls[msg->start_ch[0]],msg->ch_count[0]);
                         // need update hwpwm
                         if(mrc) printf("mimas_send_err in %d\n", __LINE__);

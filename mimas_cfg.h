@@ -18,7 +18,9 @@
 #define MIMAS_PWM_OUT_PER_GRP_CNT   (8)
 #define MIMAS_PWM_OUT_CNT           (MIMAS_PWM_OUT_PER_GRP_CNT * MIMAS_PWM_GROUP_CNT)
 
-
+#define PWM_GRP_A       1
+#define PWM_GRP_B       2
+#define PWM_GRP_ALL     (PWM_GRP_A | PWM_GRP_B)
 typedef struct
 {
     uint8_t clk_rdy:1;
