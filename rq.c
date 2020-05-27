@@ -5,38 +5,58 @@
 #define unlikely(x)     __builtin_expect((x),0)
 static post_box_t* defPB = NULL;
 
-post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size)
+post_box_t* createPB_RQ(uint32_t count, const char* name, uint8_t* rqs, uint32_t q_size)
 {
     post_box_t* pb = (post_box_t*)calloc(1, sizeof(post_box_t));
     if(pb == NULL)return(NULL);
     if(name!=NULL)strncat(pb->pbName, name, 31);
-    memset((void*)(&pb->rq_head), 0, sizeof(fl_head_t));
-    #ifdef LL_BUFFER
-    InitPBList(count, &pb->pile);
-    InitPBList(0, &pb->box);
-    sem_init(&pb->box.sem, 0, 0);
-    sem_init(&pb->pile.sem, 0, count);
+    pb->pbTyp = pb_rq_e;
+    memset((void*)(&pb->rq), 0, sizeof(rq_head_t));
 
-    #else
+    pb->rq.count = 0;
+    pb->rq.genQ = rqs;
+    pb->rq.head = (pb->rq.head - 1)& (count-1u);
+    pb->rq.Q_MSK = (count-1u);
+    pb->rq.slot_sz = q_size / count;
+    pthread_spin_init( &pb->rq.lock,  PTHREAD_PROCESS_PRIVATE );
 
-    pb->rq_head.count = 0;
-    pb->rq_head.genQ = rqs;
-    pb->rq_head.head = (pb->rq_head.head - 1)& (count-1u);
-    pb->rq_head.Q_MSK = (count-1u);
-    pb->rq_head.slot_sz = q_size / count;
-    pthread_spin_init( &pb->rq_head.lock,  PTHREAD_PROCESS_PRIVATE );
-    #endif
     return(pb);
 }
 
-void  setDefPB(const post_box_t* pb)
+
+post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_t item_size)
 {
-    defPB =pb;
+    int i;
+    post_box_t* pb = (post_box_t*)calloc(1, sizeof(post_box_t));
+    if(pb == NULL)return(NULL);
+    if(name!=NULL)strncat(pb->pbName, name, 31);
+    pb->pbTyp = pb_ll_e;
+    memset((void*)(&pb->ll), 0, sizeof(ll_pb_t));
+    pb->ll.box.count = 0;
+    pb->ll.box.head = NULL;
+    pb->ll.box.tail = NULL;
+
+
+    pb->ll.pile.head = (fl_t)calloc(count, sizeof(freeList_t));
+    pb->ll.pile.count = count;
+    fl_t n = pb->ll.pile.head;
+    for(i=0;i<count-1;i++)
+    {
+        n->item.pl.itemId = i;
+        n->item.pl.msg = &pool[i * item_size];
+        n->nxt = &n[1];
+        n = n->nxt;
+    }
+    n->item.pl.itemId = i;
+    n->item.pl.msg = &pool[i * item_size];
+    n->nxt = NULL;
+    pb->ll.pile.tail = n;
+    pthread_spin_init( &pb->ll.box.lock,  PTHREAD_PROCESS_PRIVATE );
+    pthread_spin_init( &pb->ll.pile.lock,  PTHREAD_PROCESS_PRIVATE );
+    return(pb);
 }
-
-#ifndef LL_BUFFER
-
-int rezerveMsgs(int count, fl_head_t* hd)
+// RQ API
+int rezerveMsgs(int count, rq_head_t* hd)
 {
     uint32_t t = hd->tail;
     if(t>hd->head)
@@ -53,7 +73,7 @@ int rezerveMsgs(int count, fl_head_t* hd)
         return( MIN(r,count));
     }
 }
-peer_pack_t* rezerveMsg( fl_head_t* hd)
+peer_pack_t* rezerveMsg( rq_head_t* hd)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count > hd->Q_MSK)return(NULL);
@@ -61,7 +81,7 @@ peer_pack_t* rezerveMsg( fl_head_t* hd)
 }
 
 /*  get a pointer to next unread msg */
-peer_pack_t* getMsg(fl_head_t* hd)
+peer_pack_t* getMsg(rq_head_t* hd)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count <1)return(NULL);
@@ -70,17 +90,25 @@ peer_pack_t* getMsg(fl_head_t* hd)
 }
 
 /* mark a msg are "read" and move tail index , decrease count */
-void msgRead(fl_head_t* hd)
+void msgRead(rq_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);
-    hd->count = __atomic_sub_fetch(&hd->count, 1, __ATOMIC_RELAXED);
+    register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
+    if(count>0)
+    {
+        hd->count = __atomic_sub_fetch(&hd->count, 1, __ATOMIC_RELAXED);
+    }
+    else
+    {
+        printf("%s WTF??\n", ((char*)hd) +  MAX(sizeof(ll_pb_t), sizeof(rq_head_t) ) );
+    }
     pthread_spin_unlock(&hd->lock);
     hd->tail = ((++hd->tail) & hd->Q_MSK);
     hd->tailStep++;
 }
 
 /* mark a msg are "read" and move tail index , decrease count , copy msg into buffer "pack"*/
-int getCopyMsg(fl_head_t* hd, peer_pack_t* pack)
+int getCopyMsg(rq_head_t* hd, peer_pack_t* pack)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count <1)return(-1);
@@ -95,7 +123,7 @@ int getCopyMsg(fl_head_t* hd, peer_pack_t* pack)
     return (0);
 }
 /* mark 1 slot as written, meaning slot processing is done, msg will be available to receiver */
-void msgWritten(fl_head_t* hd)
+void msgWritten(rq_head_t* hd)
 {
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_add_fetch(&hd->count, 1, __ATOMIC_RELAXED);
@@ -105,7 +133,7 @@ void msgWritten(fl_head_t* hd)
 }
 
 /* mark cnt slots as written, meaning slot processing is done, msgs will be available to receiver */
-void msgWrittenMulti(fl_head_t* hd, int cnt)
+void msgWrittenMulti(rq_head_t* hd, int cnt)
 {
     pthread_spin_lock(&hd->lock);
     hd->count = __atomic_add_fetch(&hd->count, cnt, __ATOMIC_RELAXED);
@@ -118,7 +146,7 @@ void msgWrittenMulti(fl_head_t* hd, int cnt)
     check how many slots up to cnt can are free to reserve in PO
     without sending messages, and return array of pointers to **p
 */
-int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
+int rezerveMsgMulti(rq_head_t* hd,peer_pack_t** p, int cnt)
 {
     int r=0;
     uint_fast32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
@@ -131,13 +159,22 @@ int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt)
     return(cnt-1);
 }
 
-int get_pb_info(fl_head_t* from, fl_head_t* to)
+int get_pb_info(rq_head_t* from, rq_head_t* to)
 {
     pthread_spin_lock(&from->lock);
     *to = *from;
     pthread_spin_unlock(&from->lock);
 }
-int post_msg(fl_head_t* hd, void* data, int len)
+void prn_pb_info(post_box_t* pb)
+{
+    if(pb->pbTyp == pb_rq_e)
+    {
+        printf("RQ name:%s head: %u, tail:%u, count: %u\n", \
+        pb->pbName, pb->rq.head, pb->rq.tail, pb->rq.count);
+    }
+}
+
+int post_msg(rq_head_t* hd, void* data, int len)
 {
     do
     {
@@ -157,7 +194,7 @@ int post_msg(fl_head_t* hd, void* data, int len)
     return (0);
 }
 
-int get_taces(fl_head_t* hd, int* indexes, int max_count )
+int get_taces(rq_head_t* hd, int* indexes, int max_count )
 {
 
     int *pidx = indexes;
@@ -174,7 +211,7 @@ int get_taces(fl_head_t* hd, int* indexes, int max_count )
     pthread_spin_unlock(&hd->lock);
     return(max_count);
 }
-void free_traces(fl_head_t* hd, int count)
+void free_traces(rq_head_t* hd, int count)
 {
     pthread_spin_lock(&hd->lock);
     hd->count -=count;
@@ -182,106 +219,32 @@ void free_traces(fl_head_t* hd, int count)
     hd->tail &= hd->Q_MSK;
     pthread_spin_unlock(&hd->lock);
 }
-#else
+//LL API
 
 
-
-
-
-
-int InitArtList(uint32_t count, fl_head_t* hd)
-{
-	fl_t nd;
-	int i;
-	/* always init mutexes, even if initial count of LL is 0 */
-	//hd->mux = cmx;
-	pthread_mutex_init(&hd->mux, NULL);
-    pthread_mutex_lock(&hd->mux);
-    sem_init(&hd->sem, 0, 0);
-	hd->tail = NULL;
-	hd->tail = NULL;
-    hd->count=0;
-    hd->collisions = 0;
-	if(count>0)
-	{
-		hd->head = (fl_t)calloc(count, sizeof(freeList_t));
-		if(hd->head)
-		{
-			hd->count = count;
-			nd=hd->head;
-			for(i=0;i<count-1;i++)
-			{
-                nd->item.hdr.msgid = art_rq_msg_e;
-				nd->item.pl.itemId = i;
-				nd->nxt = nd+1;
-				nd = nd->nxt;
-			}
-			nd->item.hdr.msgid = art_rq_msg_e;
-			nd->item.pl.itemId = i;
-			nd->nxt=NULL;
-			hd->tail = nd;
-		}
-	}
-    pthread_mutex_unlock(&hd->mux);
-	return(0);
-}
-
-
-static int InitPBList(uint32_t count, fl_head_t* hd)
-{
-	fl_t nd;
-	int i;
-	/* always init mutexes, even if initial count of LL is 0 */
-	//hd->mux = cmx;
-	pthread_mutex_init(&hd->mux, NULL);
-    pthread_mutex_lock(&hd->mux);
-	hd->tail = NULL;
-	hd->tail = NULL;
-    hd->count=0;
-    hd->collisions = 0;
-	if(count>0)
-	{
-		hd->head = (fl_t)calloc(count, sizeof(freeList_t));
-		if(hd->head)
-		{
-			hd->count = count;
-			nd=hd->head;
-			for(i=0;i<count-1;i++)
-			{
-				nd->nxt = nd+1;
-				nd->item.hdr.msgtype = def_msg_e;
-				nd->item.pl.itemId = i;
-				nd = nd->nxt;
-			}
-			nd->item.hdr.msgtype = def_msg_e;
-            nd->item.pl.itemId = i;
-			nd->nxt=NULL;
-			hd->tail = nd;
-		}
-	}
-    pthread_mutex_unlock(&hd->mux);
-	return(0);
-}
 
 /* Removes the head item from the LinkedList, and returns it to caller.
  * if it is the last item in list then head and tail are set to NULL.
  */
 fl_t getNode(fl_head_t* hd)
 {
+/*
     while( pthread_mutex_trylock(&hd->mux)!=0)
     {
-
       __atomic_add_fetch(&hd->collisions, 1, __ATOMIC_RELAXED);
     }
+    */
+    pthread_spin_lock(&hd->lock);
 	//pthread_mutex_lock(&hd->mux);
 	if(hd->head==NULL)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			printf("Head Null, count %u in %p\n",hd->count, hd);
+			printf("File %s, Line %d, Head Null, count %u in %p\n", __FILE__, __LINE__, hd->count, hd);
 			hd->count = 0;
 		}
-		pthread_mutex_unlock(&hd->mux);
+		//pthread_mutex_unlock(&hd->mux);
+		pthread_spin_unlock(&hd->lock);
 		return(NULL);
 	}
 	fl_t nd=hd->head;
@@ -292,7 +255,7 @@ fl_t getNode(fl_head_t* hd)
 			hd->count++;
 			nd = nd->nxt;
 		}
-		printf("Head NOT Null, count was 0, but actual %u in %p\n", hd->count, hd);
+		printf("File %s, Line %d, Head NOT Null, count was 0, but actual %u in %p\n", __FILE__, __LINE__, hd->count, hd);
 	}
 	nd=hd->head;
 
@@ -305,7 +268,8 @@ fl_t getNode(fl_head_t* hd)
 	{
 		hd->head = nd->nxt;
 	}
-	pthread_mutex_unlock(&hd->mux);
+	//pthread_mutex_unlock(&hd->mux);
+	pthread_spin_unlock(&hd->lock);
 	return(nd);
 }
 
@@ -314,19 +278,15 @@ fl_t getNode(fl_head_t* hd)
 int getNodes(fl_head_t* hd, fl_t* nodes)
 {
     int count =0;
-    while( pthread_mutex_trylock(&hd->mux)!=0)
-    {
-      __atomic_add_fetch(&hd->collisions, 1, __ATOMIC_RELAXED);
-    }
-	//pthread_mutex_lock(&hd->mux);
+    pthread_spin_lock(&hd->lock);
 	if(hd->head==NULL)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			printf("Head Null, count %u in %p\n",hd->count, hd);
+			printf("File %s, Line %d Head Null, count %u in %p\n",__FILE__, __LINE__,hd->count, hd);
 			hd->count = 0;
 		}
-		pthread_mutex_unlock(&hd->mux);
+		pthread_spin_unlock(&hd->lock);
 		return(NULL);
 	}
 	fl_t nd=hd->head;
@@ -339,26 +299,28 @@ int getNodes(fl_head_t* hd, fl_t* nodes)
     }
     if(unlikely(count!=hd->count))
     {
-        printf("Head NOT Null, count was %d, but actual %u in %p\n",count, hd->count, hd);
+        printf("File %s, Line %d Head NOT Null, count was %d, but actual %u in %p\n",__FILE__, __LINE__,count, hd->count, hd);
     }
 	nd=hd->head;
     hd->count = 0;
     hd->tail = NULL;
     hd->head = NULL;
 	*nodes = nd;
-	pthread_mutex_unlock(&hd->mux);
+	pthread_spin_unlock(&hd->lock);
 	return(count);
 }
 
 
 /* Appends a node item to the tail of the "hd" Linked List. */
-uint32_t putNode(fl_head_t* hd, fl_t nd)
+uint32_t putNode(post_box_t* pb, fl_t nd)
 {
 	//__sync_fetch_and_add(&hd->count, 1ul);
 	//
 	uint32_t cnt;
+	if( unlikely(pb == NULL)) return 0;
+	fl_head_t* hd = &pb->ll.pile;
 	if( unlikely(hd == NULL)) return 0;
-	pthread_mutex_lock(&hd->mux);
+	pthread_spin_lock(&hd->lock);
 	if(likely(nd!=NULL))
 	{
 		if(hd->tail!=NULL)
@@ -371,39 +333,42 @@ uint32_t putNode(fl_head_t* hd, fl_t nd)
 		hd->count++;
 	}
 	cnt = hd->count;
-	pthread_mutex_unlock(&hd->mux);
+	printf("\t\t\t\t\t PBput:%s Rem %d\n",pb->pbName, hd->count);
+	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
 }
 
 inline uint32_t getNodeCount(fl_head_t* hd)
 {
-
+/*
 	uint32_t cnt;
 
-	pthread_mutex_lock(&hd->mux);
+	pthread_spin_lock(&hd->lock);
 	cnt =  hd->count;
-	pthread_mutex_unlock(&hd->mux);
-	return(cnt);
-	//return( (uint32_t)(__atomic_load_n(&hd->count,__ATOMIC_ACQ_REL)));
+	pthread_spin_unlock(&hd->lock);
+	return(cnt);*/
+	return( (uint32_t)(__atomic_load_n(&hd->count,__ATOMIC_ACQ_REL)));
 }
 
 
 fl_t msgRxNB(post_box_t* pb)
 {
-    if(pb==NULL)pb = defPB;
-    if( sem_trywait(&pb->box.sem) == EAGAIN) return NULL;
-    return(getNode(&pb->box));
+    if(pb==NULL)return(NULL);
+    if(0==getNodeCount(&pb->ll.box))return(NULL);
+    return(getNode(&pb->ll.box));
 }
 
 fl_t msgRxBL(post_box_t* pb)
 {
-    if(pb==NULL)pb = defPB;
-    while(sem_wait(&pb->box.sem)<0);
-
-    return(getNode(&pb->box));
+    if(pb==NULL)return(NULL);
+    while(1)
+    {
+        if(0==getNodeCount(&pb->ll.box)) pthread_yield();
+        else  return(getNode(&pb->ll.box));
+    }
 }
-
+/*
 fl_t msgRxBLTimed(post_box_t* pb, struct timespec *ts, int* err)
 {
     if(pb==NULL)pb = defPB;
@@ -414,54 +379,121 @@ fl_t msgRxBLTimed(post_box_t* pb, struct timespec *ts, int* err)
     }
     return(getNode(&pb->box));
 }
-
-fl_t msgPostNB(post_box_t* pb, const msg_t* msg)
+*/
+fl_t msgPostNB(post_box_t* pb, const msg_t* msg, uint32_t sz)
 {
-    if(pb==NULL)pb = defPB;
-    if( sem_trywait(&pb->pile.sem) == EAGAIN)return(NULL);
-    fl_t n=getNode(&pb->pile);
-    memcpy(&n->item, msg, sizeof(msg_t));
-    putNode(&pb->box,  n);
-    sem_post(&pb->box.sem);
+    if(pb==NULL)return(NULL);
+    fl_t n = getNode(&pb->ll.pile);
+    if(n == NULL)return(NULL);
+    if(sz<1)sz = sizeof(msg_t);
+    memcpy(&n->item, msg, sz);
+    putNode(&pb->ll.box,  n);
     return(n);
 }
 
-fl_t msgPostBL(post_box_t* pb, const msg_t* msg)
+fl_t msgPostBL(post_box_t* pb, const msg_t* msg, uint32_t sz)
 {
-    if(pb==NULL)pb = defPB;
-    while( sem_wait(&pb->pile.sem) <0);
-    fl_t n=getNode(&pb->pile);
-    memcpy(&n->item, msg, sizeof(msg_t));
-    putNode(&pb->box,  n);
-    sem_post(&pb->box.sem);
+    if(pb==NULL)return(NULL);
+    fl_t n = NULL;
+    while(n == NULL)
+    {
+        n = getNode(&pb->ll.pile);
+        if(n == NULL) pthread_yield();
+    }
+    if(sz<1)sz = sizeof(msg_t);
+    memcpy(&n->item, msg, sz);
+    putNode(&pb->ll.box,  n);
     return(n);
 }
 
 void msgRelease(const post_box_t* pb, const fl_t msg)
 {
-    if(pb==NULL)pb = defPB;
-    putNode(&pb->pile,  msg);
-    sem_post(&pb->pile.sem);
+    if(pb==NULL)
+    {
+        printf("NULL pb, failed to Release  Msg\n");
+        return;
+    }
+    putNode(&pb->ll.pile,  msg);
 }
 
 void msgRezervedPostNB(post_box_t* pb, const fl_t msg)
 {
-    if(pb==NULL)pb = defPB;
-    putNode(&pb->box,  msg);
-    sem_post(&pb->box.sem);
+    if(pb==NULL)
+    {
+        printf("NULL pb, failed to Post Msg\n");
+        return;
+    }
+    putNode(&pb->ll.box,  msg);
 }
 
 fl_t msgRezerveNB(post_box_t* pb)
 {
-    if(pb==NULL)pb = defPB;
-    if( sem_trywait(&pb->pile.sem) == EAGAIN)
+    if(pb==NULL)
     {
-        return(NULL);
+        printf("NULL pb, failed to Rezerve  Msg\n");
+        return;
     }
-    fl_t n=getNode(&pb->pile);
-    return(n);
+    return(getNode(&pb->ll.pile));
 }
 
+
+int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
+{
+    uint32_t cnt =0;
+    fl_head_t* hd = &pb->ll.pile;
+    pthread_spin_lock(&hd->lock);
+	if(hd->head==NULL)
+	{
+		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
+		{
+			printf("File %s, Line:%d Head Null, count %u in %p\n",__FILE__,__LINE__,hd->count, hd);
+			hd->count = 0;
+		}
+		pthread_spin_unlock(&hd->lock);
+		return(NULL);
+	}
+	fl_t nd =  hd->head;
+    *nodes = hd->head;
+    if(count>=hd->count)
+    {
+        printf("LowBuffer\n");
+    }
+	while(nd)
+    {
+        if(++cnt == count)break;
+        nd = nd->nxt;
+    }
+    hd->count -= cnt;
+    if(hd->count == 0)
+    {
+        hd->head = NULL;
+        hd->tail = NULL;
+    }
+    else
+    {
+        hd->head = nd->nxt;
+        nd->nxt = NULL;
+    }
+    printf("\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
+	pthread_spin_unlock(&hd->lock);
+	return(cnt);
+}
+
+
+void prnLLdetail(fl_t br, char* WHO, char* name)
+{
+    printf("%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
+    int cnt=0;
+    while(br)
+    {
+        printf("%3u, "/*[%p],*/ , br->item.pl.itemId/*, br->item.pl.msg*/);
+        br = br->nxt;
+        cnt++;
+        //if((++cnt & 3) == 3)printf("\n\t");
+    }
+    printf(" Sum %d \n", cnt);
+}
+/*
 fl_t msgRezerveTimed(post_box_t* pb, long nsec, int* cause)
 {
     struct timespec ts;
@@ -485,8 +517,8 @@ int postGetPileCount(post_box_t* pb)
     int cnt, rc;
     rc = sem_getvalue(&pb->pile.sem, &cnt);
     return((rc==0)?cnt:rc);
-}
-#endif
+}*/
+
 /* Append the "from" LinkedList chain to the tail of the "to" LinkedList.
  * If "to" was empty, it will fill it with "from".
  * "from" is always left empty at return.
@@ -525,3 +557,77 @@ IRAM_ATTR void returnOwner(fl_head_t* hd)
 	xSemaphoreGive(hd->owner);
 }
 */
+/*
+int InitArtList(uint32_t count, fl_head_t* hd)
+{
+	fl_t nd;
+	int i;
+	// always init mutexes, even if initial count of LL is 0
+	//hd->mux = cmx;
+	pthread_mutex_init(&hd->mux, NULL);
+    pthread_mutex_lock(&hd->mux);
+    sem_init(&hd->sem, 0, 0);
+	hd->tail = NULL;
+	hd->tail = NULL;
+    hd->count=0;
+    hd->collisions = 0;
+	if(count>0)
+	{
+		hd->head = (fl_t)calloc(count, sizeof(freeList_t));
+		if(hd->head)
+		{
+			hd->count = count;
+			nd=hd->head;
+			for(i=0;i<count-1;i++)
+			{
+                nd->item.hdr.msgid = art_rq_msg_e;
+				nd->item.pl.itemId = i;
+				nd->nxt = nd+1;
+				nd = nd->nxt;
+			}
+			nd->item.hdr.msgid = art_rq_msg_e;
+			nd->item.pl.itemId = i;
+			nd->nxt=NULL;
+			hd->tail = nd;
+		}
+	}
+    pthread_mutex_unlock(&hd->mux);
+	return(0);
+}
+
+
+static int InitPBList(uint32_t count, fl_head_t* hd)
+{
+	fl_t nd;
+	int i;
+	// always init mutexes, even if initial count of LL is 0
+	//hd->mux = cmx;
+	pthread_mutex_init(&hd->mux, NULL);
+    pthread_mutex_lock(&hd->mux);
+	hd->tail = NULL;
+	hd->tail = NULL;
+    hd->count=0;
+    hd->collisions = 0;
+	if(count>0)
+	{
+		hd->head = (fl_t)calloc(count, sizeof(freeList_t));
+		if(hd->head)
+		{
+			hd->count = count;
+			nd=hd->head;
+			for(i=0;i<count-1;i++)
+			{
+				nd->nxt = nd+1;
+				nd->item.hdr.msgtype = def_msg_e;
+				nd->item.pl.itemId = i;
+				nd = nd->nxt;
+			}
+			nd->item.hdr.msgtype = def_msg_e;
+            nd->item.pl.itemId = i;
+			nd->nxt=NULL;
+			hd->tail = nd;
+		}
+	}
+    pthread_mutex_unlock(&hd->mux);
+	return(0);
+}*/

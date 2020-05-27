@@ -879,7 +879,6 @@ int socketStart(node_t* n, uint16_t portno)
 
 void NodeInit(app_node_t* an, uint8_t maxUniCount, addressing_t start_uni_addr)
 {
-
     if(an == NULL)
     {
         printf("Failed to init Node, null obj!\n");
@@ -894,16 +893,6 @@ void NodeInit(app_node_t* an, uint8_t maxUniCount, addressing_t start_uni_addr)
     snprintf(n->longName,63,"%s pixel Controler by Sagi. Node romName %s-%u-%X%X\0\0",NODE_NAME_DEF, NODE_NAME_DEF,NODE_VERSION, cIfDet->mac[4], cIfDet->mac[5]);
     snprintf(n->nodeName,16,"%s-%u-%X%X\0",NODE_NAME_DEF,NODE_VERSION, cIfDet->mac[4], cIfDet->mac[5]);
     strcpy(n->userName, n->nodeName);
-    /*fl_t cn;
-    int i=0;
-    while( (cn = msgRezerveNB(an->artPB))!=NULL )
-    {
-        cn->item.pl.itemId  = i;
-        cn->pb = (void*)an->artPB;
-        cn->item.hdr.msgtype = art_rq_msg_e;
-        i++;
-        msgRelease(an->artPB, cn);
-    }*/
 }
 
 int tmr_create(uint32_t *timerid )
@@ -920,3 +909,134 @@ int tmr_create(uint32_t *timerid )
 
 }
 //pthread_sigqueue
+
+
+//#define ALL_EVENTS
+//#define EVENT_DIFFS
+void* one_sec(void* d)
+{
+    post_box_t*     pb = (post_box_t*)d;
+    rq_head_t*      evrq_head = &pb->rq;
+    trace_msg_t*    evrq = evrq_head->evq;
+    char       tsbuf[8192];
+    memset(tsbuf, 0, 8192);
+    struct timespec timeZero, last_ts, sleep_for[2];
+    clock_gettime(CLOCK_REALTIME, &timeZero);
+    usleep(  (useconds_t)500000u );
+    const char* evTypes[]={"conPop  ", "conProc ", "fullPack", "mimasStart ","mimasRef", "prodRx  "};
+    int idxs[64];
+    int res, i, len;
+    trace_msg_t trs[64];
+    long mins, sec;
+    long nanosec, tdiff;
+    float difff;
+    last_ts = timeZero;
+    uint32_t rx_p, proc_p;
+    rx_p=0;
+    proc_p = 0;
+    int print=0;
+    while(1)
+    {
+        clock_gettime(CLOCK_REALTIME, &sleep_for[0]);
+        res = get_taces(evrq_head, &idxs[0], 64);
+        if(res>0)
+        {
+            print+=res;
+            i=0;
+            len =0;
+            for(i=0;i<res;i++)
+            {
+                trs[i] = evrq[idxs[i]];
+            }
+
+            free_traces(evrq_head, i);
+            for(i=0;i<res;i++)
+            {
+                if(trs[i].ev == prod_rx_msgs)
+                {
+                    rx_p+=trs[i].msg_cnt;
+                }
+                else
+                {
+                    if(trs[i].ev == cons_msg_proced)
+                    {
+                        proc_p+=1;
+                    }
+                }
+            }
+#ifdef ALL_EVENTS
+            for(i=0;i<res;i++)
+            {
+                mins = (( long)(trs[i].ts.tv_sec - timeZero.tv_sec))/60ll;
+                sec = (( long)(trs[i].ts.tv_sec - timeZero.tv_sec))%60ll;
+                if(trs[i].ts.tv_nsec >= timeZero.tv_nsec)
+                {
+
+                    nanosec = trs[i].ts.tv_nsec - timeZero.tv_nsec;
+                    nanosec/=1000l;
+                }
+                else
+                {
+                    nanosec =  timeZero.tv_nsec - trs[i].ts.tv_nsec;
+                    nanosec/=1000l;
+                    nanosec = 1000000l - nanosec;
+                    if(sec<1)
+                    {
+                        printf("error calc\n");
+                    }
+                    else
+                    {
+                        sec--;
+                    }
+                }
+                if(trs[i].ts.tv_nsec >= last_ts.tv_nsec)
+                {
+
+                    tdiff = trs[i].ts.tv_nsec - last_ts.tv_nsec;
+                    tdiff/=1000l;
+                    //tdiff.tv_sec =trs[i].ts.tv_sec - last_ts.tv_sec
+                }
+                else
+                {
+                    tdiff =  last_ts.tv_nsec - trs[i].ts.tv_nsec;
+                    tdiff/=1000l;
+                    tdiff = 1000000l - tdiff;
+                    if( (trs[i].ts.tv_sec - last_ts.tv_sec)<1)
+                    {
+                        printf("error2 calc\n");
+                    }
+
+                }
+                difff =((float)(tdiff))/1000.0f;
+                len += sprintf(&tsbuf[len], "[%04u] %02ld:%02ld.%06ld : %9s\t%u\t\tdiff %3.3f msec\n", idxs[i],   \
+                mins, sec, nanosec, evTypes[trs[i].ev] , \
+                (trs[i].ev == prod_rx_msgs)?trs[i].msg_cnt:(uint32_t)(trs[i].art_addr), difff);
+                last_ts = trs[i].ts;
+            }
+            printf("%s\0",tsbuf );
+#endif
+        }
+        else
+        {
+#ifdef  EVENT_DIFFS
+            if((print)&&(rx_p!=proc_p))
+            {
+                printf("%u Events: packRx: %u, packProc %u, diff %d\n",print, rx_p, proc_p, (rx_p - proc_p));
+            }
+#endif
+            print =0;
+            uint32_t sleefor;
+            clock_gettime(CLOCK_REALTIME, &sleep_for[1]);
+            if(sleep_for[1].tv_sec > sleep_for[0].tv_sec)
+            {
+                sleefor =  (uint32_t) ((1000000000 - sleep_for[0].tv_nsec + sleep_for[1].tv_nsec)/1000u);
+           }
+            else
+            {
+                sleefor = (uint32_t) ((sleep_for[1].tv_nsec - sleep_for[0].tv_nsec)/1000u);
+            }
+            usleep(100000 - sleefor); // every 100mSec
+        }
+    }
+}
+

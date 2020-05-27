@@ -17,7 +17,21 @@
 #endif
 
 #define EV_Q_DEPTH      8192
-#define PWM_Q_DEPTH   32
+#define PWM_Q_DEPTH     32
+#define PIX_Q_DEPTH     1024
+
+#ifndef MAX
+#define MAX(a,b)  (a<b?b:a)
+#endif
+#ifndef MIN
+#define MIN(a,b)  (a>b?b:a)
+#endif
+
+typedef enum
+{
+    pb_ll_e,
+    pb_rq_e
+}pb_type_e;
 
 typedef enum{
     no_msg_e      = -1,
@@ -38,8 +52,9 @@ typedef struct
 
 typedef struct
 {
-        uint32_t    itemId;
-        peer_pack_t  *msg;
+        uint32_t        itemId;
+        sock_data_msg_t  *msg;
+        uint32_t        vDevId;
 }msg_payload_t;
 
 
@@ -50,24 +65,10 @@ typedef struct
 }msg_t;
 
 typedef struct  __fList__t* fl_t;
-typedef struct __fList__t
-{
-    msg_t               item;
-	void*               pb;
-	fl_t		        nxt;
 
-}freeList_t;
 
 typedef struct
 {
-#ifdef LL_BUFFER
-	fl_t			head;
-	fl_t			tail;
-    pthread_mutex_t 	mux;
-	sem_t               sem;
-    uint_fast32_t       collisions;
-    uint_fast32_t 	count __attribute__ ((aligned(64)));
-#else
 #define             IDXMASK ( RQ_DEPTH  - 1u )
 #define             EV_Q_MASK (EV_Q_DEPTH - 1u)
 	uint_fast32_t		head __attribute__ ((aligned(64)));
@@ -90,51 +91,72 @@ typedef struct
         peer_pack_t     *rq;
         trace_msg_t     *evq;
     };
-#endif
-
 	pthread_spinlock_t  lock;
+}rq_head_t;
+
+typedef struct
+{
+    uint_fast32_t 	    count __attribute__ ((aligned(64)));
+	uint32_t            _p3[128 - sizeof(uint_fast32_t)];
+	fl_t			    head;
+	fl_t			    tail;
+    pthread_spinlock_t  lock;
 }fl_head_t;
 
 typedef struct
 {
-#ifdef LL_BUFFER
     fl_head_t   pile;
     fl_head_t   box;
-#else
-    fl_head_t   rq_head;
-#endif
+}ll_pb_t;
+
+typedef struct
+{
+    pb_type_e pbTyp;
+    union
+    {
+        ll_pb_t     ll;
+        rq_head_t   rq;
+    };
     char        pbName[32];
 }post_box_t;
 
+typedef struct __fList__t
+{
+    msg_t               item;
+	post_box_t*         pb;
+	fl_t		        nxt;
 
-post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size);
-void setDefPB(const post_box_t* pb);
-void msgWritten(fl_head_t* hd);
-void msgWrittenMulti(fl_head_t* hd, int cnt);
-void msgRead(fl_head_t* hd);
-int getCopyMsg(fl_head_t* hd, peer_pack_t* pack);
-#ifndef LL_BUFFER
+}freeList_t;
+
+//post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size);
+post_box_t* createPB_RQ(uint32_t count, const char* name, uint8_t* rqs, uint32_t q_size);
+post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_t item_size);
+void msgWritten(rq_head_t* hd);
+void msgWrittenMulti(rq_head_t* hd, int cnt);
+void msgRead(rq_head_t* hd);
+int getCopyMsg(rq_head_t* hd, peer_pack_t* pack);
+
 #define INC_HEAD( H ) \
     H.head = ((++H.head) & IDXMASK)
 #define INC_TAIL( T ) \
     T.tail = ((++T.tail) & IDXMASK)
-int rezerveMsgs(int count, fl_head_t* hd);
-peer_pack_t* rezerveMsg( fl_head_t* hd);
-peer_pack_t* getMsg(fl_head_t* hd);
-int rezerveMsgMulti(fl_head_t* hd,peer_pack_t** p, int cnt);
-int get_pb_info(fl_head_t* from, fl_head_t* to);
-int post_msg(fl_head_t* hd, void* data, int len);
-int get_taces(fl_head_t* hd, int* indexes, int max_count );
-void free_traces(fl_head_t* hd, int count);
-#else
+int rezerveMsgs(int count, rq_head_t* hd);
+peer_pack_t* rezerveMsg( rq_head_t* hd);
+peer_pack_t* getMsg(rq_head_t* hd);
+int rezerveMsgMulti(rq_head_t* hd,peer_pack_t** p, int cnt);
+int get_pb_info(rq_head_t* from, rq_head_t* to);
+int post_msg(rq_head_t* hd, void* data, int len);
+int get_taces(rq_head_t* hd, int* indexes, int max_count );
+void free_traces(rq_head_t* hd, int count);
+void prn_pb_info(post_box_t* pb);
+// LL API
 fl_t getNode(fl_head_t* hd);
 int getNodes(fl_head_t* hd, fl_t* nodes); // pull all pendiong node out at once
-uint32_t putNode(fl_head_t* hd, fl_t nd);
+uint32_t putNode(post_box_t* pb, fl_t nd);
 uint32_t getNodeCount(fl_head_t* hd);
-int InitArtList(uint32_t count, fl_head_t* hd);
 
-fl_t msgPostNB(post_box_t* pb, const msg_t* msg);
-fl_t msgPostBL(post_box_t* pb, const msg_t* msg);
+fl_t msgPostNB(post_box_t* pb, const msg_t* msg, uint32_t sz);
+fl_t msgPostBL(post_box_t* pb, const msg_t* msg, uint32_t sz);
 void msgRelease(const post_box_t* pb, const fl_t msg);
 fl_t msgRxNB(post_box_t* pb);
 fl_t msgRxBL(post_box_t* pb);
@@ -143,10 +165,11 @@ int postGetPileCount(post_box_t* pb);
 fl_t msgRezerveNB(post_box_t* pb);
 void msgRezervedPostNB(post_box_t* pb, const fl_t msg);
 fl_t msgRezerveTimed(post_box_t* pb, long nsec, int* cause);
+int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count);
+void prnLLdetail(fl_t br, char* WHO, char* name);
 #define getFree(L , N, I) \
 	do{ N = getNode((L)); \
 	if(N == NULL){I = ERROR_IDX;} \
 	else {I = N->item.pl.itemId;}}while(0);
 
-#endif
 #endif

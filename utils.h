@@ -73,4 +73,5 @@ int socketStart(node_t* n, uint16_t portno);
 int setIP(char* newIP, int ifIdx);
 int socket_set_blocking(const int sockfd, int on);
 int tmr_create(uint32_t *timerid );
+void* one_sec(void* d);
 #endif // UTILS_H_INCLUDED

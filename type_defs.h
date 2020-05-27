@@ -15,8 +15,7 @@
 #include <netinet/in.h>
 #include <netpacket/packet.h>
 
-
-
+#include <time.h>
 #include <linux/wireless.h>
 #include <linux/if_ether.h>
 
@@ -59,6 +58,9 @@
 #define CHAN_PER_PIX    (3)
 
 
+#define MMLEN_MMAX   40
+#define MILIS   (1000000ul)
+
 typedef enum
 {
     rgb_map_e=0,
@@ -66,9 +68,30 @@ typedef enum
     rbg_map_e,
     gbr_map_e,
     brg_map_e,
-    bgr_map_e
+    bgr_map_e,
+    wrgb_map_e,
+    wgrb_map_e,
+    wrbg_map_e,
+    wgbr_map_e,
+    wbrg_map_e,
+    wbgr_map_e,
+    rgbw_map_e,
+    grbw_map_e,
+    rbgw_map_e,
+    gbrw_map_e,
+    brgw_map_e,
+    bgrw_map_e,
 }color_mapping_e;
 
+typedef enum
+{
+    pix_0_vec, // undefined, use default
+    pix_1_vec,
+    pix_2_vec,
+    pix_3_vec,
+    pix_4_vec,
+    pix_5_vec
+}pixel_col_vec_e;
 
 
 extern const char* rstcauses[];/*={"Init","FrErr","ArtOther","NoSema","Socket Timeout"};*/
@@ -254,6 +277,7 @@ typedef union
 typedef enum
 {
     msg_typ_socket_data=1,
+    msg_typ_socket_ntfy,
     msg_typ_sys_event,
     msg_typ_pwm_cmd
 }msg_type_e;
@@ -308,16 +332,28 @@ typedef struct{
 
 typedef struct
 {
+    msg_type_e  mtyp;
+    void        *rq_owner;
+    void        *datapt;
+}sockdat_ntfy_t;
+
+typedef struct
+{
+    msg_type_e          mtyp;
+    struct sockaddr_in  sender;
+    uint32_t            length;
+    any_prot_pack_t     pl; //payload
+}sock_data_msg_t;
+
+typedef struct
+{
     union
     {
-        struct
-        {
-            msg_type_e  mtyp;
-            struct sockaddr_in  sender;
-            any_prot_pack_t     pl; //payload
-        };
-        sys_event_msg_t sys_ev;
-        pwm_cmd_msg_t   pwm_msg;
+        msg_type_e              genmtyp;
+        sock_data_msg_t         artn_msg;
+        sys_event_msg_t         sys_ev;
+        pwm_cmd_msg_t           pwm_msg;
+        sockdat_ntfy_t          dataNtfy;
     };
 }peer_pack_t   __attribute__ ((aligned(64)));
 
@@ -343,7 +379,7 @@ typedef struct
     uint32_t        msg_cnt;
     };
 }trace_msg_t;
-
+/*
 typedef enum
 {
     dev_unknown=0,
@@ -399,7 +435,7 @@ typedef struct art_map__t
     };
     artmap_t        nxt;
 };
-
+*/
 
 #include "rq.h"
 typedef struct post_box_t* postbox;

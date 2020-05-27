@@ -80,7 +80,7 @@ static uint8_t art[sizeof(art_net_pack_t)];
 
 
 
-void make_artnet_resp(peer_pack_t* pp)
+void make_artnet_resp(peer_pack_t* peep)
 {
 	int i,k,j,cnt;
 	uint8_t     max_uni;
@@ -88,6 +88,7 @@ void make_artnet_resp(peer_pack_t* pp)
 	uint16_t    abs_addr = Node->art_start_uni;
 	art_net_pack_t *p=(art_net_pack_t*)&art[0];
 	art_net_poll_rep_t *pr = &p->PollRep;
+	sock_data_msg_t *pp = (sock_data_msg_t *)peep;
 	//peerp->sockt = Node->ArtSock;
 	memset(art,0,sizeof(art));
 	p->head.OpCode.OpCode = OpPollReply;

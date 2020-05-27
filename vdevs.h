@@ -6,12 +6,40 @@
 #include <byteswap.h>
 #define MAX_VDEV_CNT    (MIMAS_PWM_OUT_CNT + MIMAS_STREAM_OUT_CNT)
 
+
+
+typedef struct
+{
+	sm_state_e		state, prev_state;
+	struct{
+		uint16_t has_seq:1;
+		uint16_t uses_seq:1;
+		uint16_t duplicate:1;
+		uint16_t minuniflag:1;
+		uint16_t SockOpen:1;
+		uint16_t DataOk:1;
+		uint16_t hasSync:1;
+		uint16_t usesSync:1;
+		uint16_t dc:8;
+	};
+	addressing_t    min_uni;            /*minimum detected address */
+	uint8_t         unis_cfg;           /*total configured universe count */
+	uint8_t         active_unis;        /*total detected univese count */
+	uint8_t			cur_seq;
+	uint8_t         prev_seq;
+	uint8_t         sync_missing_cnt;
+    uint64_t		curr_map;
+	uint64_t		expected_full_map;
+	artNetSyncState_e syncState;
+	struct timespec last_upd_ts;
+}vdev_sm_t; /* vdev state machine struct */
+
 typedef enum
 {
     unused_dev = 0,
-    ws_pix_dev,
-    dmx_out_dev,
-    pwm_dev
+    ws_pix_dev = 1,
+    dmx_out_dev = 2,
+    pwm_dev = 4
 }vdevs_e;
 
 typedef struct
@@ -21,6 +49,7 @@ typedef struct
     addressing_t      end_address;
     uint16_t          start_offset;
     uint16_t          end_offset;
+    vdev_sm_t         vdsm;
     int8_t            vDevIdx;
 }vdev_common_t;
 
@@ -29,9 +58,13 @@ typedef struct
     vdev_common_t   com;
     uint16_t        pixel_count;
     color_mapping_e col_map;
+    pixel_col_vec_e colCnt;
     uint8_t         pix_per_uni;
     uint8_t         out_start_id;
 }ws_pix_vdev_t;
+
+#define PIX_COL_MAP_DEF (rgb_map_e)
+#define PIX_VEC_CNT_DEF (pix_3_vec)
 
 typedef struct
 {
@@ -186,7 +219,9 @@ typedef struct
 {
     addressing_t min_addr;
     addressing_t max_addr;
+    uint16_t     mapped_addresses;
     addressing_t next_free_addr;
+    int_fast8_t  last_used_idx;
     mimas_out_dev_t devs[MAX_VDEV_CNT];
     union
     {

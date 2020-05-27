@@ -28,6 +28,7 @@ void init_mimas_vdevs(void)
     devList.min_addr = 0xFFFF;
     devList.max_addr = 0;
     devList.next_free_addr= 0;
+    devList.last_used_idx= 0;
     memset((void*)&mimas_devices, 0, sizeof(mimas_dev_t));
     int i, j;
     for(j = 0;j<MIMAS_PWM_GROUP_CNT;j++)
@@ -55,14 +56,20 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     {
         wsdev->pix_per_uni = PIX_PER_UNI;
     }
-    uint32_t uni_need = wsdev->pixel_count/wsdev->pix_per_uni;
+    uint32_t uni_need;
     uint32_t out_need, res;
     addressing_t tmpAddr;
-    int idx;
+    int idx, i , j, k;
     int hwIdx=0;
     idx = findFreeDevListSlot();
     if(idx == -1)return(-1);
 
+    if((wsdev->colCnt == pix_0_vec) || (wsdev->colCnt > pix_5_vec))  wsdev->colCnt = PIX_VEC_CNT_DEF;
+    if(wsdev->pix_per_uni == 0) wsdev->pix_per_uni = (512u /((uint32_t)(wsdev->colCnt)));
+
+    uni_need = (wsdev->pixel_count  / wsdev->pix_per_uni );
+
+    while((uni_need * wsdev->pix_per_uni) < wsdev->pixel_count )uni_need++;
 
     if(wsdev->com.start_address == 0xFFFF)
     {
@@ -70,23 +77,22 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     }
     tmpAddr = wsdev->com.start_address;
 
-    if(wsdev->pixel_count -(uni_need * wsdev->pix_per_uni )>0)
-    {
-        uni_need++;
-    }
-    int i;
     out_need = uni_need/UNI_PER_OUT;
     if(( out_need * UNI_PER_OUT ) < uni_need)
     {
         out_need++;
     }
+    j = wsdev->pixel_count * (uint32_t)wsdev->colCnt;
+
     for(i=0;i<uni_need;i++)
     {
-        if(checkfDmxRangeIsFree(tmpAddr+i, 0, 509)==0)
+        k = MIN(j, wsdev->pix_per_uni * (uint32_t)wsdev->colCnt);
+        if(checkfDmxRangeIsFree(tmpAddr+i, 0,k)==0)
         {
             printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
             return(-5);
         }
+        j-=k;
     }
     devList.devs[idx].dev_com.dev_type = ws_pix_dev;
     devList.devs[idx].dev_com.start_address = wsdev->com.start_address;
@@ -121,11 +127,24 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     if(devList.max_addr<tmpAddr)devList.max_addr = tmpAddr;
     devList.next_free_addr = tmpAddr+1;
     tmpAddr = devList.devs[idx].dev_com.start_address;
+
+    j = wsdev->pixel_count * (uint32_t)wsdev->colCnt;
+
     for(i=0;i<uni_need;i++)
     {
-        addAddrUsage(tmpAddr++,0, 509);
+        k = MIN(j, wsdev->pix_per_uni * (uint32_t)wsdev->colCnt);
+        addAddrUsage(tmpAddr++,0, k);
+        j-=k;
     }
 
+    if(devList.last_used_idx<idx)devList.last_used_idx = idx;
+    vdev_sm_t* vdsm = &devList.devs[idx].dev_com.vdsm;
+    memset((void*)vdsm, 0, sizeof(vdev_sm_t));
+    vdsm->active_unis = 0;
+    vdsm->curr_map = 0ul;
+    vdsm->expected_full_map = BIT64(uni_need)-1ul;
+    vdsm->min_uni = devList.devs[idx].dev_com.start_address;
+    vdsm->unis_cfg = uni_need;
     return(idx);
 }
 
@@ -141,9 +160,9 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     uint16_t best_choise  = 0;
     uint16_t best_start_idx = 0;
     uint16_t free_bm;
-
-    if(need<1)return(-2);
     need = cfg->ch_count;
+    if(need<1)return(-2);
+
     uint16_t tst_bm;
     uint8_t startS, endS;
     uint16_t t;
@@ -158,7 +177,7 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     }
     else
     {
-        if(need>8)need = 8;
+        if(need>8)need = 8; // for simplicity, a vDev can exist only inside a single HWdev, not span across more
         tst_bm = BIT16(need)-1u;
         if(cfg->hwStartIdx == -1) // means autoselect hwChannel, in requested group
         {
@@ -315,6 +334,15 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     cfg->com.vDevIdx = idx;
     if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
     addAddrUsage(devList.devs[idx].dev_com.start_address,devList.devs[idx].pwm_vdev->com.start_offset, offset);
+    if(devList.last_used_idx<idx)devList.last_used_idx = idx;
+    vdev_sm_t* vdsm = &devList.devs[idx].dev_com.vdsm;
+    memset((void*)vdsm, 0, sizeof(vdev_sm_t));
+    vdsm->active_unis = 0;
+    vdsm->curr_map = 0ul;
+    vdsm->expected_full_map = 1ul;
+    vdsm->min_uni = devList.devs[idx].dev_com.start_address;
+    vdsm->unis_cfg = 1;
+
     return(idx);
 }
 /*
@@ -336,9 +364,11 @@ uint16_t getNextDmxChanAtAddr(addressing_t adr)
 */
 int findVDevAtAddr(addressing_t adr)
 {
+    if( (devList.min_addr > adr) ||(devList.max_addr < adr) ) return(-1);
     int i;
-    for(i=0;i<MAX_VDEV_CNT;i++)
+    for(i=0;i<=devList.last_used_idx;i++)
     {
+        if(i==MAX_VDEV_CNT)break;
         if(devList.devs[i].dev_com.dev_type != unused_dev)
         {
             if((devList.devs[i].dev_com.end_address>= adr) && (devList.devs[i].dev_com.start_address<= adr))return(i);
@@ -351,9 +381,11 @@ int findVDevAtAddr(addressing_t adr)
 int findVDevsAtAddr(addressing_t adr, int* idxs)
 {
     int i, count;
+    if( (devList.min_addr > adr) ||(devList.max_addr < adr) ) return(0);
     count = 0;
-    for(i=0;i<MAX_VDEV_CNT;i++)
+    for(i=0;i<=devList.last_used_idx;i++)
     {
+        if(i==MAX_VDEV_CNT)break;
         if(devList.devs[i].dev_com.dev_type != unused_dev)
         {
             if((devList.devs[i].dev_com.end_address>= adr) && (devList.devs[i].dev_com.start_address<= adr))
@@ -371,8 +403,9 @@ int findVDevsOfType(vdevs_e typ, int* idxs)
 {
     int i, count;
     count = 0;
-    for(i=0;i<MAX_VDEV_CNT;i++)
+    for(i=0;i<=devList.last_used_idx;i++)
     {
+        if(i==MAX_VDEV_CNT)break;
         if(devList.devs[i].dev_com.dev_type == typ)
         {
             idxs[count++] = i;
@@ -499,7 +532,7 @@ int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end)
         AddrNode->nxt_free=0;
        // node = addItem(devList.addr_usage,AddrNode);
         addItem(&AddrNode->ranges,DmxNode);
-
+        devList.mapped_addresses++;
     }
 
     AddrNode->items++;
