@@ -5,6 +5,7 @@
 #define unlikely(x)     __builtin_expect((x),0)
 static post_box_t* defPB = NULL;
 
+
 post_box_t* createPB_RQ(uint32_t count, const char* name, uint8_t* rqs, uint32_t q_size)
 {
     post_box_t* pb = (post_box_t*)calloc(1, sizeof(post_box_t));
@@ -33,12 +34,14 @@ post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_
     pb->pbTyp = pb_ll_e;
     memset((void*)(&pb->ll), 0, sizeof(ll_pb_t));
     pb->ll.box.count = 0;
+    pb->ll.box.maxCount = count;
     pb->ll.box.head = NULL;
     pb->ll.box.tail = NULL;
 
 
     pb->ll.pile.head = (fl_t)calloc(count, sizeof(freeList_t));
     pb->ll.pile.count = count;
+    pb->ll.pile.maxCount = count;
     fl_t n = pb->ll.pile.head;
     for(i=0;i<count-1;i++)
     {
@@ -311,8 +314,11 @@ int getNodes(fl_head_t* hd, fl_t* nodes)
 }
 
 
-/* Appends a node item to the tail of the "hd" Linked List. */
-uint32_t putNode(post_box_t* pb, fl_t nd)
+/* Appends one node item at 'nd' to the tail of the "pile" Linked List in 'pb'
+    if '*nnd' is not NULL, it is set to point to nd->nxt
+    before nd->nxt is set to NULL.
+    The node count in pile is returned*/
+uint32_t putNode(post_box_t* pb, fl_t nd, fl_t *nnd)
 {
 	//__sync_fetch_and_add(&hd->count, 1ul);
 	//
@@ -328,12 +334,44 @@ uint32_t putNode(post_box_t* pb, fl_t nd)
 			hd->tail->nxt = nd;
 		}
 		hd->tail = nd;
+		if(nnd!=NULL)*nnd = nd->nxt;
 		hd->tail->nxt = NULL;
-		if(hd->head==NULL)hd->head = nd;
+		if(hd->head==NULL)hd->head = hd->tail;
 		hd->count++;
 	}
+
 	cnt = hd->count;
-	printf("\t\t\t\t\t PBput:%s Rem %d\n",pb->pbName, hd->count);
+	printf("\t\t\t\t\t PBput:%s Item %u, Rem %d\n",pb->pbName,  nd->item.pl.itemId, hd->count);
+	pthread_spin_unlock(&hd->lock);
+	return(cnt);
+	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
+}
+
+
+/* Appends a node item to the tail of the "hd" Linked List. */
+uint32_t putNodes(post_box_t* pb, fl_t nd)
+{
+	//__sync_fetch_and_add(&hd->count, 1ul);
+	//
+	uint32_t cnt = 0;
+	if( unlikely(pb == NULL)) return 0;
+	fl_head_t* hd = &pb->ll.pile;
+	if( unlikely(hd == NULL)) return 0;
+	pthread_spin_lock(&hd->lock);
+	if(likely(nd!=NULL))
+	{
+		if(hd->tail!=NULL)	hd->tail->nxt = nd;
+		if(hd->head==NULL)  hd->head = nd;
+		cnt++;
+		while(nd->nxt)
+		{
+            cnt++;
+            nd = nd->nxt;
+		}
+		hd->tail = nd;
+	}
+	hd->count+=cnt;
+	printf("\t\t\t\t\t PBputMany:%s Rem %d\n",pb->pbName, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
@@ -387,7 +425,7 @@ fl_t msgPostNB(post_box_t* pb, const msg_t* msg, uint32_t sz)
     if(n == NULL)return(NULL);
     if(sz<1)sz = sizeof(msg_t);
     memcpy(&n->item, msg, sz);
-    putNode(&pb->ll.box,  n);
+    putNode(&pb->ll.box,  n, NULL);
     return(n);
 }
 
@@ -402,7 +440,7 @@ fl_t msgPostBL(post_box_t* pb, const msg_t* msg, uint32_t sz)
     }
     if(sz<1)sz = sizeof(msg_t);
     memcpy(&n->item, msg, sz);
-    putNode(&pb->ll.box,  n);
+    putNode(&pb->ll.box,  n, NULL);
     return(n);
 }
 
@@ -413,7 +451,7 @@ void msgRelease(const post_box_t* pb, const fl_t msg)
         printf("NULL pb, failed to Release  Msg\n");
         return;
     }
-    putNode(&pb->ll.pile,  msg);
+    putNode(&pb->ll.pile,  msg, NULL);
 }
 
 void msgRezervedPostNB(post_box_t* pb, const fl_t msg)
@@ -423,7 +461,7 @@ void msgRezervedPostNB(post_box_t* pb, const fl_t msg)
         printf("NULL pb, failed to Post Msg\n");
         return;
     }
-    putNode(&pb->ll.box,  msg);
+    putNode(&pb->ll.box,  msg, NULL);
 }
 
 fl_t msgRezerveNB(post_box_t* pb)
@@ -457,6 +495,7 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
     if(count>=hd->count)
     {
         printf("LowBuffer\n");
+        count = hd->count;
     }
 	while(nd)
     {
@@ -464,6 +503,10 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
         nd = nd->nxt;
     }
     hd->count -= cnt;
+    if(hd->count> hd->maxCount)
+    {
+        printf("LL %s underflow!\n", pb->pbName);
+    }
     if(hd->count == 0)
     {
         hd->head = NULL;
@@ -479,20 +522,39 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
 	return(cnt);
 }
 
-
 void prnLLdetail(fl_t br, char* WHO, char* name)
 {
+    pthread_spin_lock(&prnlock);
     printf("%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
     int cnt=0;
+    peer_pack_t *pkt;
+    sock_data_msg_t* dt;
     while(br)
     {
-        printf("%3u, "/*[%p],*/ , br->item.pl.itemId/*, br->item.pl.msg*/);
+        dt = br->item.pl.msg;
+        printf("%3u(%u), " , br->item.pl.itemId, dt->pl.art.ArtDmxOut.a_net.raw_addr);
         br = br->nxt;
         cnt++;
         //if((++cnt & 3) == 3)printf("\n\t");
     }
     printf(" Sum %d \n", cnt);
+    pthread_spin_unlock(&prnlock);
 }
+
+void addToBranch(node_branch_t* br, fl_t nd)
+{
+    if(br->hd == NULL)
+    {
+        br->hd = nd;
+        br->lst = nd;
+    }
+    else
+    {
+        br->lst->nxt = nd;
+        br->lst = br->lst->nxt;
+    }
+}
+
 /*
 fl_t msgRezerveTimed(post_box_t* pb, long nsec, int* cause)
 {

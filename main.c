@@ -31,6 +31,8 @@
 #define gettid syscall(SYS_gettid)
 
 #include <byteswap.h>
+
+pthread_spinlock_t  prnlock=0;
 volatile int upd_pwm = 0;
 
 out_def_t           outs[MIMAS_STREAM_OUT_CNT ];
@@ -274,7 +276,12 @@ void* consumer(void* d)
     post_box_t* pb = artn->artPB;
     node_t *me = artn->artnode;
     sm_t* sm = &me->sm;
-
+    node_branch_t branches[5];
+    node_branch_t* pwmBr = &branches[0];
+    node_branch_t* pixBr = &branches[1];
+    node_branch_t* localBr =&branches[2];
+    node_branch_t* dropBr = &branches[3];
+    node_branch_t* miscBr = &branches[4];
     int  rc;
     uint16_t start_bm;
     fl_t cn, cnn;
@@ -348,7 +355,7 @@ void* consumer(void* d)
             {
                 if(++ticks_to_sleep == 5)
                 {
-                    usleep(2ul);
+                    usleep(1ul);
                     ticks_to_sleep=0;
                 }
             }
@@ -400,8 +407,7 @@ void* consumer(void* d)
                 break;
             }
         }
-        fl_t pwmNtfy   = NULL, pixNtfy   = NULL, localNtfy   = NULL, dropNtfy   = NULL;
-        fl_t pwmNtfyCn = NULL, pixNtfyCn = NULL, localNtfyCn = NULL, dropNtfyCn = NULL;
+        memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
         cn = nodes;
         sock_data_msg_t* dt;
         int nodecnt = 0;
@@ -421,16 +427,7 @@ void* consumer(void* d)
 
                     if(devCnt <1)
                     {
-                        if(pixNtfy ==  NULL)
-                        {
-                            dropNtfy = cn;
-                            dropNtfyCn = cn;
-                        }
-                        else
-                        {
-                           dropNtfyCn->nxt = cn;
-                           dropNtfyCn = dropNtfyCn->nxt;
-                        }
+                        addToBranch(dropBr,cn);
                         cn = cn->nxt;
                         continue;
                     }
@@ -447,39 +444,20 @@ void* consumer(void* d)
                             case ws_pix_dev:
                             {
                                 cn->item.pl.vDevId = devIdx[i];
-                                if(pixNtfy ==  NULL)
-                                {
-                                    pixNtfy = cn;
-                                    pixNtfyCn = cn;
-                                }
-                                else
-                                {
-                                   pixNtfyCn->nxt = cn;
-                                   pixNtfyCn = pixNtfyCn->nxt;
-                                }
-
+                                addToBranch(pixBr,cn);
                                 devdstinct|=ws_pix_dev;
                                 break;
                             }
                             case pwm_dev:
                             {
                                 cn->item.pl.vDevId = devIdx[i];
-                                if(pwmNtfy ==  NULL)
-                                {
-                                    pwmNtfy = cn;
-                                    pwmNtfyCn = cn;
-                                }
-                                else
-                                {
-                                    pwmNtfyCn->nxt = cn;
-                                    pwmNtfyCn = cn;
-                                }
+                                addToBranch(pwmBr,cn);
                                 devdstinct|=pwm_dev;
                                 break;
                             }
                             default:
                             {
-                                printf("Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
+                                prn("Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
                                 break;
                             }
                         } // end of switch devType
@@ -488,49 +466,42 @@ void* consumer(void* d)
                 } // end of art_res switch
                 default:
                 {
-                    printf("\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
-                    cnn = cn->nxt;
-                    putNode(cn->pb, cn);
-                    cn = cnn;
+                    prn("\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
+                    addToBranch(dropBr,cn);
+                    //putNode(cn->pb, cn, &cnn);
+                    //cn = cnn;
                 }
             }
             cn = cn->nxt;
         } // end of cn loop
-        printf("Got %d nodes in Ntfy\n",nodecnt);
+        prn("Got %d nodes in Ntfy\n",nodecnt);
 
-        if(pwmNtfy)
+        if(pwmBr->hd)
         {
             sockdat_ntfy_t pwmmsg;
             pwmmsg.mtyp = msg_typ_socket_ntfy;
-            pwmmsg.rq_owner = pwmNtfy->pb;
-            pwmmsg.datapt = pwmNtfy;
-            pwmNtfyCn->nxt  = NULL;
-            prnLLdetail(pwmNtfy, "CONS", "PwmLL");
+            pwmmsg.rq_owner = pwmBr->hd->pb;
+            pwmmsg.datapt = pwmBr->hd;
+            pwmBr->lst->nxt  = NULL;
+            prnLLdetail(pwmBr->hd, "CONS", "PwmLL");
             post_msg(&pwm_pb->rq,&pwmmsg,sizeof(sockdat_ntfy_t));
         }
-        if(pixNtfy)
+        if(pixBr->hd)
         {
             sockdat_ntfy_t pixmsg;
             pixmsg.mtyp = msg_typ_socket_ntfy;
-            pixmsg.rq_owner = pixNtfy->pb;
-            pixmsg.datapt = pixNtfy;
-            pixNtfyCn->nxt  = NULL;
-            prnLLdetail(pixNtfy, "CONS", "PixLL");
+            pixmsg.rq_owner = pixBr->hd->pb;
+            pixmsg.datapt = pixBr->hd;
+            pixBr->lst->nxt  = NULL;
+            prnLLdetail(pixBr->hd, "CONS", "PixLL");
             post_msg(&pix_pb->rq,&pixmsg,sizeof(sockdat_ntfy_t));
-            printf("Sending pix Pkt to handler\n");
+            prn("Sending pix Pkt to handler\n");
         }
-        if(dropNtfy)
+        if(dropBr->hd)
         {
-            cn = dropNtfy;
-            dropNtfyCn->nxt  = NULL;
-            prnLLdetail(cn, "DROPS", "Drops");
-            while(cn)
-            {
-                printf("Dropping unamapped Pkt %d\n",cn->item.pl.itemId);
-                cnn = cn->nxt;
-                putNode(cn->pb, cn);
-                cn = cnn;
-            }
+            dropBr->lst->nxt  = NULL;
+            prnLLdetail(dropBr->hd, "DROPS", "Drops");
+            prn("Dropped %d unamapped Pkts\n",putNodes(dropBr->hd->pb, dropBr->hd));
         }
     }
         //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full)
@@ -545,7 +516,7 @@ void *pix_handler(void* dat)
         do
         {
             pkt = getMsg(&pb->rq);
-            usleep(10ul);
+            usleep(2ul);
         }while(pkt == NULL);
         switch(pkt->genmtyp)
         {
@@ -555,13 +526,11 @@ void *pix_handler(void* dat)
                 fl_t cnn;
                 post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
                 //msgRead(&pb->rq);
-                printf("msg_typ_socket_ntfy msg received\n");
+                prn("msg_typ_socket_ntfy msg received\n");
                 while(cn)
                 {
-                    printf("Consumed item %d inPixHandler\n", cn->item.pl.itemId);
-                    cnn = cn->nxt;
-                    putNode(cn->pb,cn);
-                    cn = cnn;
+                    prn("Consumed item %d inPixHandler\n", cn->item.pl.itemId);
+                    putNode(cn->pb,cn, &cn);
                 }
                 break;
             }
@@ -581,7 +550,7 @@ void *pix_handler(void* dat)
             */
             default:
             {
-                printf("PixHandler received unhandled msgType %d\n", pkt->genmtyp);
+                prn("PixHandler received unhandled msgType %d\n", pkt->genmtyp);
             }
         }
         msgRead(&pb->rq);
@@ -604,7 +573,7 @@ void* producer(void* d)
     mimas_state_t       mSt;
     int                 addr_len, ret;
     pid_t               pid;
-    int                 batch= devList.mapped_addresses * 2;
+    int                 batch= devList.mapped_addresses ;
     sm_state_e          sm_state_cache;
     fl_t                nodes;
     fl_t                cn;
@@ -693,7 +662,7 @@ void* producer(void* d)
                 //usleep(5);
                 if(msg_need == 0)
                 {
-                    usleep(5000000ul);
+                    usleep(5000ul);
                     printf("No nodes available!!\n");
 
                 }
@@ -736,7 +705,7 @@ void* producer(void* d)
 
         //msg_need = MIN(nodes_avail, batch);
         timeout.tv_sec = 0l;
-        timeout.tv_nsec = (0ul /** MILIS*/);
+        timeout.tv_nsec = (2ul * MILIS);
         sm_state_cache = n->sm.state;
         msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
         time(&trm.ts2);
@@ -1079,9 +1048,7 @@ void pmwTest()
                 while(cn)
                 {
                     sd =*(sock_data_msg_t*)cn->item.pl.msg;
-                    cnn = cn->nxt;
-                    putNode(cn->pb,cn);
-                    cn = cnn;
+                    putNode(cn->pb,cn, &cn);
                     ap =  &sd.pl.art;
                     art_res = ArtNetDecode(ap);
 

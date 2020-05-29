@@ -15,6 +15,14 @@
     bcm2835_gpio_clr(MIMAS_RST); \
     bcm2835_delayMicroseconds(10000ull); \
     bcm2835_gpio_set(MIMAS_RST);}while(0);
+
+extern pthread_spinlock_t  prnlock;
+
+#define prnLock pthread_spin_lock(&prnlock)
+#define prnUnlock pthread_spin_unlock(&prnlock)
+#define prn(...)  do{ \
+            prnLock; printf(__VA_ARGS__);prnUnlock;} while(0);
+
 void
 print_trace (void);
 void print_trace_gdb();

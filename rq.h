@@ -26,7 +26,7 @@
 #ifndef MIN
 #define MIN(a,b)  (a>b?b:a)
 #endif
-
+extern pthread_spinlock_t  prnlock;
 typedef enum
 {
     pb_ll_e,
@@ -98,6 +98,7 @@ typedef struct
 {
     uint_fast32_t 	    count __attribute__ ((aligned(64)));
 	uint32_t            _p3[128 - sizeof(uint_fast32_t)];
+	uint32_t            maxCount;
 	fl_t			    head;
 	fl_t			    tail;
     pthread_spinlock_t  lock;
@@ -128,6 +129,14 @@ typedef struct __fList__t
 
 }freeList_t;
 
+typedef struct
+{
+    fl_t hd;
+    fl_t lst;
+}node_branch_t;
+
+void addToBranch(node_branch_t* br, fl_t nd);
+
 //post_box_t* createPB(uint32_t count, const char* name, void* rqs, uint32_t q_size);
 post_box_t* createPB_RQ(uint32_t count, const char* name, uint8_t* rqs, uint32_t q_size);
 post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_t item_size);
@@ -152,7 +161,8 @@ void prn_pb_info(post_box_t* pb);
 // LL API
 fl_t getNode(fl_head_t* hd);
 int getNodes(fl_head_t* hd, fl_t* nodes); // pull all pendiong node out at once
-uint32_t putNode(post_box_t* pb, fl_t nd);
+uint32_t putNode(post_box_t* pb, fl_t nd, fl_t *nnd);
+uint32_t putNodes(post_box_t* pb, fl_t nd);
 uint32_t getNodeCount(fl_head_t* hd);
 
 fl_t msgPostNB(post_box_t* pb, const msg_t* msg, uint32_t sz);
