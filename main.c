@@ -31,6 +31,7 @@
 #define gettid syscall(SYS_gettid)
 
 #include <byteswap.h>
+#include "bm_handling.h"
 
 pthread_spinlock_t  prnlock=0;
 volatile int upd_pwm = 0;
@@ -266,6 +267,7 @@ int sendOutToMimas(int oSel)
 
 void* consumer(void* d)
 {
+    uint8_t             check_unis;
     int                 devCnt, devIdx[MAX_VDEV_CNT];
     uint32_t idx, i,    attention;
     peer_pack_t         ppack;
@@ -344,10 +346,13 @@ void* consumer(void* d)
     post_box_t* pb_owner;
     sockdat_ntfy_t* msg;
     int ticks_to_sleep;
+    check_unis = 0;
+    uint32_t unirvced = 0;
     while(1)
     {
         cdev = NULL;
         ticks_to_sleep = 0;
+        memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
         do
         {
             pkt = getMsg(&sock_pb->rq);
@@ -355,7 +360,7 @@ void* consumer(void* d)
             {
                 if(++ticks_to_sleep == 5)
                 {
-                    usleep(1ul);
+                    usleep(5ul);
                     ticks_to_sleep=0;
                 }
             }
@@ -407,10 +412,23 @@ void* consumer(void* d)
                 break;
             }
         }
-        memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
         cn = nodes;
         sock_data_msg_t* dt;
         int nodecnt = 0;
+        if(check_unis && (devList.glo_uni_map->reserved < check_unis) )
+        {
+            if(devList.glo_uni_map->reserved>devList.tmp_uni_map->reserved)
+            {
+                prn("Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
+                bm_t* bm = devList.glo_uni_map;
+                devList.glo_uni_map = devList.tmp_uni_map ;
+                devList.tmp_uni_map = bm;
+
+            }
+            clearBM(devList.tmp_uni_map);
+            check_unis=0;
+        }
+        taken_e taken;
         while(cn)
         {
             nodecnt++;
@@ -423,6 +441,20 @@ void* consumer(void* d)
                 case art_data_e:
                 {
                     raw_addr.anet = ap->ArtDmxOut.a_net;
+                    check_unis++;
+                    taken = updateBM(devList.tmp_uni_map,bm_reserved_e,raw_addr.addr);
+                    if(taken == bm_free_e)
+                    {
+                        check_unis=0;
+                        prn("Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
+                    }
+                    if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
+                    {
+                        taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
+                        if(taken == bm_free_e)prn("Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
+
+                    }
+
                     devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
 
                     if(devCnt <1)
@@ -474,7 +506,7 @@ void* consumer(void* d)
             }
             cn = cn->nxt;
         } // end of cn loop
-        prn("Got %d nodes in Ntfy\n",nodecnt);
+        prn("Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
 
         if(pwmBr->hd)
         {
@@ -573,7 +605,7 @@ void* producer(void* d)
     mimas_state_t       mSt;
     int                 addr_len, ret;
     pid_t               pid;
-    int                 batch= devList.mapped_addresses ;
+    int                 batch= 2;
     sm_state_e          sm_state_cache;
     fl_t                nodes;
     fl_t                cn;
@@ -652,8 +684,9 @@ void* producer(void* d)
             setSockTimout(n->sockfd,500);
         }
         msg_need = 0;
+        MMLEN = (MAX(2,RCVED_UNIS(devList)))/2;
+        while(MMLEN > MMLEN_MMAX)MMLEN>>1;
         printf("MMLEN = %d\n", MMLEN);
-       // usleep(1000ul);
         if(nodes_avail < MMLEN)
         {
             do{
@@ -679,9 +712,14 @@ void* producer(void* d)
             {
                 nodes = con_node;
             }
+            nodes_avail = msg_need;
+        }
+        else
+        {
+            msg_need = nodes_avail;
         }
 
-        nodes_avail = msg_need;
+
 
         prnLLdetail(nodes, "PROD", "ReadySlots");
         cn = nodes;

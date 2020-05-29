@@ -1,6 +1,6 @@
 #include "vdevs.h"
 #include "type_defs.h"
-
+#include "bm_handling.h"
 
 mimas_dev_t     mimas_devices;
 vdevs_t         devList;
@@ -40,7 +40,10 @@ void init_mimas_vdevs(void)
             mimas_devices.pwms[j].ch_data[i].phyIdx = i;
         }
     }
+    devList.glo_uni_map = createBm(32768ul);
+    devList.tmp_uni_map = createBm(32768ul);
 }
+
 int findFreeDevListSlot(void)
 {
     int i;

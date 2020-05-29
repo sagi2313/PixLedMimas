@@ -5,7 +5,7 @@
 #include "gen_lists.h"
 #include <byteswap.h>
 #define MAX_VDEV_CNT    (MIMAS_PWM_OUT_CNT + MIMAS_STREAM_OUT_CNT)
-
+#include "bm_handling.h"
 
 
 typedef struct
@@ -228,9 +228,12 @@ typedef struct
         ln_t            addr_usage;
         dbg_dmx_use     dbg_list;
     };
+    bm_t*   glo_uni_map;
+    bm_t*   tmp_uni_map;
 }vdevs_t;
 
-
+#define MAPPED_UNIS( D )    (D.mapped_addresses)
+#define RCVED_UNIS( D )     (D.glo_uni_map->reserved)
 
 extern vdevs_t devList;
 extern mimas_dev_t     mimas_devices;
