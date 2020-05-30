@@ -1,6 +1,42 @@
 //create a udp server socket. return ESP_OK:success ESP_FAIL:error
 #include "utils.h"
 #include "mimas_cfg.h"
+
+log_lvl_e LogLvl[(int)log_src_max];
+uint32_t  LogMask = BIT32(log_src_max) -1u;
+const char *ll_str[] = {"DBG  ","INFO " ,"fINF","ERROR"};
+const char *ls_str[(int)log_src_max] =
+{
+    "GEN ", "PROD", "CONS", "TRAC", "EVNT", "AHAN", "PIXH", "PWMH", "DMXH", "LL  ", "GeN "
+};
+
+void setLogLevel(log_src_e src, log_lvl_e lvl)
+{
+    LogLvl[(int)src] = lvl;
+}
+
+log_lvl_e getLogLevel(log_src_e src)
+{
+    return(LogLvl[(int)src-1] );
+}
+
+void initLogLevels(log_lvl_e lvl)
+{
+    for(int i=0;i<log_src_max;i++)
+    {
+        LogLvl[i] = lvl;
+    }
+}
+
+uint64_t next_pow2_64(uint64_t x)
+{
+ return x < 2 ? x : 1<<(64-__builtin_clzl(x-1));
+}
+uint32_t next_pow2_32(uint32_t x)
+{
+    return x < 2 ? x : 1<<(32-__builtin_clz(x-1));
+}
+
 extern app_node_t* anetp;
 node_t* Node = NULL;
 static int get_socket_error_code(int socket)

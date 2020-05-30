@@ -111,8 +111,8 @@ void fault_handler(int signo, siginfo_t *info, void *extra)
 	ucontext_t *p=(ucontext_t *)extra;
 	int val = p->uc_mcontext.arm_pc;
 	printf("address = %x\n\nBACKTRACE:\n",val);
-	//print_trace();
-	print_trace_gdb();
+	print_trace();
+	//print_trace_gdb();
 	abort();
 }
 
@@ -419,7 +419,7 @@ void* consumer(void* d)
         {
             if(devList.glo_uni_map->reserved>devList.tmp_uni_map->reserved)
             {
-                prn("Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
+                prn(log_info,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
                 bm_t* bm = devList.glo_uni_map;
                 devList.glo_uni_map = devList.tmp_uni_map ;
                 devList.tmp_uni_map = bm;
@@ -446,12 +446,12 @@ void* consumer(void* d)
                     if(taken == bm_free_e)
                     {
                         check_unis=0;
-                        prn("Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
+                        prnDbg(log_con,"Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
                     }
                     if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
                     {
                         taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
-                        if(taken == bm_free_e)prn("Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                        if(taken == bm_free_e)prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
 
                     }
 
@@ -489,7 +489,7 @@ void* consumer(void* d)
                             }
                             default:
                             {
-                                prn("Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
+                                prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
                                 break;
                             }
                         } // end of switch devType
@@ -498,7 +498,7 @@ void* consumer(void* d)
                 } // end of art_res switch
                 default:
                 {
-                    prn("\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
+                    prnErr(log_con,"\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
                     addToBranch(dropBr,cn);
                     //putNode(cn->pb, cn, &cnn);
                     //cn = cnn;
@@ -506,7 +506,7 @@ void* consumer(void* d)
             }
             cn = cn->nxt;
         } // end of cn loop
-        prn("Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
+        prnDbg(log_con,"Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
 
         if(pwmBr->hd)
         {
@@ -527,13 +527,14 @@ void* consumer(void* d)
             pixBr->lst->nxt  = NULL;
             prnLLdetail(pixBr->hd, "CONS", "PixLL");
             post_msg(&pix_pb->rq,&pixmsg,sizeof(sockdat_ntfy_t));
-            prn("Sending pix Pkt to handler\n");
+            prnDbg(log_con,"Sending pix Pkt to handler\n");
         }
         if(dropBr->hd)
         {
             dropBr->lst->nxt  = NULL;
             prnLLdetail(dropBr->hd, "DROPS", "Drops");
-            prn("Dropped %d unamapped Pkts\n",putNodes(dropBr->hd->pb, dropBr->hd));
+            j = putNodes(dropBr->hd->pb, dropBr->hd);
+            prnDbg(log_con,"Dropped %d unamapped Pkts\n",j);
         }
     }
         //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full)
@@ -558,10 +559,10 @@ void *pix_handler(void* dat)
                 fl_t cnn;
                 post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
                 //msgRead(&pb->rq);
-                prn("msg_typ_socket_ntfy msg received\n");
+                prnDbg(log_pix,"msg_typ_socket_ntfy msg received\n");
                 while(cn)
                 {
-                    prn("Consumed item %d inPixHandler\n", cn->item.pl.itemId);
+                    prnDbg(log_pix,"Consumed item %d inPixHandler\n", cn->item.pl.itemId);
                     putNode(cn->pb,cn, &cn);
                 }
                 break;
@@ -582,7 +583,7 @@ void *pix_handler(void* dat)
             */
             default:
             {
-                prn("PixHandler received unhandled msgType %d\n", pkt->genmtyp);
+                prnErr(log_pix,"PixHandler received unhandled msgType %d\n", pkt->genmtyp);
             }
         }
         msgRead(&pb->rq);
@@ -647,12 +648,12 @@ void* producer(void* d)
                handle_error_en(ret, "Producer pthread_getaffinity_np2");
     else
     {
-        printf("Affinity on producer is set to 0x%0lx\n", cpuset.__bits[0]);
+        prnFinf(log_any,"Affinity on producer is set to 0x%0lx\n", cpuset.__bits[0]);
     }
 
     pid_t tid = gettid;
     ret = setpriority(PRIO_PROCESS, tid, (PROD_PRIO_NICE ) );
-    printf("Producer set_nice to (%i) returns %d\n",PROD_PRIO_NICE, ret);
+    prnFinf(log_any,"Producer set_nice to (%i) returns %d\n",PROD_PRIO_NICE, ret);
 
     time_t     now;
     struct tm  ts;
@@ -686,7 +687,7 @@ void* producer(void* d)
         msg_need = 0;
         MMLEN = (MAX(2,RCVED_UNIS(devList)))/2;
         while(MMLEN > MMLEN_MMAX)MMLEN>>1;
-        printf("MMLEN = %d\n", MMLEN);
+        prnInf(log_prod,"MMLEN = %d\n", MMLEN);
         if(nodes_avail < MMLEN)
         {
             do{
@@ -695,8 +696,8 @@ void* producer(void* d)
                 //usleep(5);
                 if(msg_need == 0)
                 {
-                    usleep(5000ul);
-                    printf("No nodes available!!\n");
+                    usleep(5000000ul);
+                    prnErr(log_prod,"No nodes available!!\n");
 
                 }
             }while(msg_need == 0);
@@ -736,7 +737,7 @@ void* producer(void* d)
         }
         if(i<msg_need)
         {
-            printf("Serious ERROR: msg_need was %d, only %d were valid\n", msg_need, i);
+            prnErr(log_prod,"Serious ERROR: msg_need was %d, only %d were valid\n", msg_need, i);
             msg_need = i;
             //nodes_avail = msg_need;
         }
@@ -747,7 +748,7 @@ void* producer(void* d)
         sm_state_cache = n->sm.state;
         msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
         time(&trm.ts2);
-        printf("Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
+        prnInf(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
 
         if((artn->artnode->all % 1000000) == 0)
         {
@@ -786,7 +787,7 @@ void* producer(void* d)
         {
             if(msgcnt == 0)
             {
-                printf("msgs = 0\n");
+                prnDbg(log_prod,"msgs = 0\n");
                 artn->artnode->all++;
                 artn->artnode->miss++;
             }
@@ -818,7 +819,7 @@ void* producer(void* d)
                 //{
 
                     errLocal = show_socket_error_reason(n->sockfd);
-                    printf("================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
+                    prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
                     //SmReset(n, eResetUnknown);
                // }
                /*
@@ -870,14 +871,16 @@ int main(void)
 {
     int res;
     setHandler(fault_handler);
-    printf("BCM lib version = %u\n", bcm2835_version());
+    initLogLevels(DEF_LOG_LVL);
+    setLogLevel(log_con,log_dbg);
+    prnInf(log_any,"BCM lib version = %u\n", bcm2835_version());
   //  bcm2835_set_debug(1);
     int rc = bcm2835_init();
     int i;
     //testLists();
     if(rc!=1)
     {
-        printf("Error %d init bcm2835\n", rc);
+        prnErr(log_any,"Error %d init bcm2835\n", rc);
         return(-1);
     }
 
@@ -899,7 +902,7 @@ int main(void)
     usleep(100000);
     pthread_t pwm_tst_th;
     pthread_create(&pwm_tst_th,NULL,pmwTest,NULL);
-    printf("Started PWM Test thread\n");
+    prnFinf(log_pwm,"Started PWM Test thread\n");
     rc = pthread_setname_np(pwm_tst_th, "PixLedPwmHan\0");
     if(rc)
     {
@@ -940,11 +943,11 @@ int main(void)
         perror("Consumer1 thread rename failed");
     }
 
-    printf("Starting Web Server...\n");
+    prnFinf(log_any,"Starting Web Server...\n");
     while(1)
     {
         webServStart();
-        printf("Web Server exited, restarting...\n");
+        prnErr(log_any,"Web Server exited, restarting...\n");
         sleep(1);
     }
     return(0);
@@ -1067,7 +1070,7 @@ void pmwTest()
                 }
                 else
                 {
-                    usleep(100);
+                    usleep(5);
                 }
             }
         }while(pkt==NULL);

@@ -1,6 +1,6 @@
 #include "rq.h"
 #include <errno.h>
-
+#include "utils.h"
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 static post_box_t* defPB = NULL;
@@ -103,7 +103,7 @@ void msgRead(rq_head_t* hd)
     }
     else
     {
-        printf("%s WTF??\n", ((char*)hd) +  MAX(sizeof(ll_pb_t), sizeof(rq_head_t) ) );
+        prnErr(log_ll,"%s WTF??\n", ((char*)hd) +  MAX(sizeof(ll_pb_t), sizeof(rq_head_t) ) );
     }
     pthread_spin_unlock(&hd->lock);
     hd->tail = ((++hd->tail) & hd->Q_MSK);
@@ -172,7 +172,7 @@ void prn_pb_info(post_box_t* pb)
 {
     if(pb->pbTyp == pb_rq_e)
     {
-        printf("RQ name:%s head: %u, tail:%u, count: %u\n", \
+        prnInf(log_ll,"RQ name:%s head: %u, tail:%u, count: %u\n", \
         pb->pbName, pb->rq.head, pb->rq.tail, pb->rq.count);
     }
 }
@@ -243,7 +243,7 @@ fl_t getNode(fl_head_t* hd)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			printf("File %s, Line %d, Head Null, count %u in %p\n", __FILE__, __LINE__, hd->count, hd);
+			prnErr(log_ll,"File %s, Line %d, Head Null, count %u in %p\n", __FILE__, __LINE__, hd->count, hd);
 			hd->count = 0;
 		}
 		//pthread_mutex_unlock(&hd->mux);
@@ -258,7 +258,7 @@ fl_t getNode(fl_head_t* hd)
 			hd->count++;
 			nd = nd->nxt;
 		}
-		printf("File %s, Line %d, Head NOT Null, count was 0, but actual %u in %p\n", __FILE__, __LINE__, hd->count, hd);
+		prnErr(log_ll,"File %s, Line %d, Head NOT Null, count was 0, but actual %u in %p\n", __FILE__, __LINE__, hd->count, hd);
 	}
 	nd=hd->head;
 
@@ -286,7 +286,7 @@ int getNodes(fl_head_t* hd, fl_t* nodes)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			printf("File %s, Line %d Head Null, count %u in %p\n",__FILE__, __LINE__,hd->count, hd);
+			prnErr(log_ll,"File %s, Line %d Head Null, count %u in %p\n",__FILE__, __LINE__,hd->count, hd);
 			hd->count = 0;
 		}
 		pthread_spin_unlock(&hd->lock);
@@ -302,7 +302,7 @@ int getNodes(fl_head_t* hd, fl_t* nodes)
     }
     if(unlikely(count!=hd->count))
     {
-        printf("File %s, Line %d Head NOT Null, count was %d, but actual %u in %p\n",__FILE__, __LINE__,count, hd->count, hd);
+        prnErr(log_ll,"File %s, Line %d Head NOT Null, count was %d, but actual %u in %p\n",__FILE__, __LINE__,count, hd->count, hd);
     }
 	nd=hd->head;
     hd->count = 0;
@@ -341,7 +341,7 @@ uint32_t putNode(post_box_t* pb, fl_t nd, fl_t *nnd)
 	}
 
 	cnt = hd->count;
-	printf("\t\t\t\t\t PBput:%s Item %u, Rem %d\n",pb->pbName,  nd->item.pl.itemId, hd->count);
+	prnDbg(log_ll,"\t\t\t\t\t PBput:%s Item %u, Rem %d\n",pb->pbName,  nd->item.pl.itemId, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
@@ -371,7 +371,7 @@ uint32_t putNodes(post_box_t* pb, fl_t nd)
 		hd->tail = nd;
 	}
 	hd->count+=cnt;
-	printf("\t\t\t\t\t PBputMany:%s Rem %d\n",pb->pbName, hd->count);
+	prnDbg(log_ll,"\t\t\t\t\t PBputMany:%s Rem %d\n",pb->pbName, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
@@ -448,7 +448,7 @@ void msgRelease(const post_box_t* pb, const fl_t msg)
 {
     if(pb==NULL)
     {
-        printf("NULL pb, failed to Release  Msg\n");
+        prnErr(log_ll,"NULL pb, failed to Release  Msg\n");
         return;
     }
     putNode(&pb->ll.pile,  msg, NULL);
@@ -458,7 +458,7 @@ void msgRezervedPostNB(post_box_t* pb, const fl_t msg)
 {
     if(pb==NULL)
     {
-        printf("NULL pb, failed to Post Msg\n");
+        prnErr(log_ll,"NULL pb, failed to Post Msg\n");
         return;
     }
     putNode(&pb->ll.box,  msg, NULL);
@@ -468,7 +468,7 @@ fl_t msgRezerveNB(post_box_t* pb)
 {
     if(pb==NULL)
     {
-        printf("NULL pb, failed to Rezerve  Msg\n");
+        prnErr(log_ll,"NULL pb, failed to Rezerve  Msg\n");
         return;
     }
     return(getNode(&pb->ll.pile));
@@ -484,7 +484,7 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			printf("File %s, Line:%d Head Null, count %u in %p\n",__FILE__,__LINE__,hd->count, hd);
+			prnErr(log_ll,"File %s, Line:%d Head Null, count %u in %p\n",__FILE__,__LINE__,hd->count, hd);
 			hd->count = 0;
 		}
 		pthread_spin_unlock(&hd->lock);
@@ -494,7 +494,7 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
     *nodes = hd->head;
     if(count>=hd->count)
     {
-        printf("LowBuffer\n");
+        prnInf(log_ll,"LowBuffer\n");
         count = hd->count;
     }
 	while(nd)
@@ -505,7 +505,7 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
     hd->count -= cnt;
     if(hd->count> hd->maxCount)
     {
-        printf("LL %s underflow!\n", pb->pbName);
+        prnErr(log_ll,"LL %s underflow!\n", pb->pbName);
     }
     if(hd->count == 0)
     {
@@ -517,28 +517,26 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
         hd->head = nd->nxt;
         nd->nxt = NULL;
     }
-    printf("\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
+    prnDbg(log_ll,"\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 }
 
 void prnLLdetail(fl_t br, char* WHO, char* name)
 {
-    pthread_spin_lock(&prnlock);
-    printf("%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
+    prnInf(log_ll,"%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
     int cnt=0;
     peer_pack_t *pkt;
     sock_data_msg_t* dt;
     while(br)
     {
         dt = br->item.pl.msg;
-        printf("%3u(%u), " , br->item.pl.itemId, dt->pl.art.ArtDmxOut.a_net.raw_addr);
+        prnInf(log_ll,"%3u(%u), " , br->item.pl.itemId, dt->pl.art.ArtDmxOut.a_net.raw_addr);
         br = br->nxt;
         cnt++;
         //if((++cnt & 3) == 3)printf("\n\t");
     }
-    printf(" Sum %d \n", cnt);
-    pthread_spin_unlock(&prnlock);
+    prnInf(log_ll," Sum %d \n", cnt);
 }
 
 void addToBranch(node_branch_t* br, fl_t nd)

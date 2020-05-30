@@ -17,11 +17,60 @@
     bcm2835_gpio_set(MIMAS_RST);}while(0);
 
 extern pthread_spinlock_t  prnlock;
+extern uint32_t  LogMask;
+const char *ll_str[];
+const char *ls_str[];
+
+typedef enum
+{
+    log_dbg,
+    log_info,
+    log_finf,
+    log_err,
+
+}log_lvl_e;
+
+typedef enum
+{
+    log_any,
+    log_prod,
+    log_con,
+    log_trace,
+    log_evnt,
+    log_any_han,
+    log_pix,
+    log_pwm,
+    log_dmx,
+    log_ll,
+    log_src_max
+}log_src_e;
+
+
+extern log_lvl_e LogLvl[];
 
 #define prnLock pthread_spin_lock(&prnlock)
 #define prnUnlock pthread_spin_unlock(&prnlock)
-#define prn(...)  do{ \
-            prnLock; printf(__VA_ARGS__);prnUnlock;} while(0);
+#define prn(LL, LS,  ...)  \
+do{ \
+        if(  ((LL>=LogLvl[(int)LS] ) || (LL==log_finf))  && ( BIT32(LS) & LogMask) ) { \
+        printf("called %s %d\n",__FILE__,__LINE__); \
+        prnLock; \
+        printf("%s(%4s): ",ll_str[(int)LL],ls_str[(int)LS]); \
+        printf( __VA_ARGS__ ); \
+        prnUnlock; \
+        } \
+        } while(0);
+
+#define  prnDbg( LS,  ...) prn(log_dbg, LS,  __VA_ARGS__)
+#define  prnInf( LS,  ...) prn(log_info, LS,  __VA_ARGS__)
+#define  prnFinf( LS,  ...) prn(log_finf, LS,  __VA_ARGS__)
+#define  prnErr( LS,  ...) prn(log_dbg, LS,  __VA_ARGS__)
+
+#define DEF_LOG_LVL log_err
+
+void initLogLevels(log_lvl_e lvl);
+log_lvl_e getLogLevel(log_src_e src);
+void setLogLevel(log_src_e src, log_lvl_e lvl);
 
 void
 print_trace (void);
