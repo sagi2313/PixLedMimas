@@ -119,6 +119,11 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
             ws->col_map = wsdev->col_map;
             ws->pixel_count = wsdev->pix_per_uni * UNI_PER_OUT;
             ws->pix_per_uni = wsdev->pix_per_uni;
+            ws->com.vDevIdx = idx;
+            ws->colCnt = wsdev->colCnt;
+            ws->col_map = wsdev->col_map;
+            memset(&ws->com.vdsm,0,sizeof(vdev_sm_t));
+            ws->com.vdsm.expected_full_map = BIT64(UNI_PER_OUT) - 1u;
             out_need--;
             hwIdx++;
         }
@@ -409,9 +414,15 @@ int findVDevsOfType(vdevs_e typ, int* idxs)
     for(i=0;i<=devList.last_used_idx;i++)
     {
         if(i==MAX_VDEV_CNT)break;
+
         if(devList.devs[i].dev_com.dev_type == typ)
         {
-            idxs[count++] = i;
+            if(idxs!=NULL)
+            {
+                idxs[count] = i;
+                //if(count<(MAX_VDEV_CNT-1))idxs[count+1]=-1;
+            }
+            count++;
         }
     }
     return(count);

@@ -53,7 +53,7 @@ extern log_lvl_e LogLvl[];
 #define prn(LL, LS,  ...)  \
 do{ \
         if(  ((LL>=LogLvl[(int)LS] ) || (LL==log_finf))  && ( BIT32(LS) & LogMask) ) { \
-        printf("called %s %d\n",__FILE__,__LINE__); \
+        /*printf("called %s %d\n",__FILE__,__LINE__);*/ \
         prnLock; \
         printf("%s(%4s): ",ll_str[(int)LL],ls_str[(int)LS]); \
         printf( __VA_ARGS__ ); \
@@ -67,6 +67,7 @@ do{ \
 #define  prnErr( LS,  ...) prn(log_dbg, LS,  __VA_ARGS__)
 
 #define DEF_LOG_LVL log_err
+#define PWM_SLEEP_TM 100000u
 
 void initLogLevels(log_lvl_e lvl);
 log_lvl_e getLogLevel(log_src_e src);

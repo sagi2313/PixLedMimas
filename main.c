@@ -225,10 +225,9 @@ void make_a_dev()
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    vd.com.start_address = 14;
+    vd.com.start_address = 1;
     res =build_dev_ws(&vd);
-    vd.com.start_address = 51;
-    res =build_dev_ws(&vd);
+
     prnDev(res);
 }
 
@@ -419,7 +418,7 @@ void* consumer(void* d)
         {
             if(devList.glo_uni_map->reserved>devList.tmp_uni_map->reserved)
             {
-                prn(log_info,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
+                prn(log_finf,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
                 bm_t* bm = devList.glo_uni_map;
                 devList.glo_uni_map = devList.tmp_uni_map ;
                 devList.tmp_uni_map = bm;
@@ -451,8 +450,11 @@ void* consumer(void* d)
                     if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
                     {
                         taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
-                        if(taken == bm_free_e)prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
-
+                        if(taken == bm_free_e)
+                        {
+                            prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                            prnFinf(log_con,"Receiving %u universes\n", devList.glo_uni_map->reserved);
+                        }
                     }
 
                     devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
@@ -544,6 +546,38 @@ void *pix_handler(void* dat)
 {
     post_box_t*         pb = pix_pb;
     peer_pack_t*        pkt;
+    prnFinf(log_pix,"PixHandler started...\n");
+    int* devs = NULL;
+    int devCnt, i, j;
+    mimas_out_dev_t** vDevs;
+    mimas_out_dev_t* cdev;
+    vdev_sm_t*  sm;
+    pix_dev_pt      pixDev;
+    int hwId=-1;
+    uint16_t    mimas_start_bm=0;
+    addressing_t    absAddr, relAddr;
+    do
+    {
+        devCnt = findVDevsOfType(ws_pix_dev,NULL);
+        if(devCnt<1) usleep(100000ul);
+    }while(devCnt<1);
+    devs = (int*)calloc(devCnt,sizeof(int));
+    vDevs = (mimas_out_dev_t*)calloc(devCnt,sizeof(mimas_out_dev_t*));
+    findVDevsOfType(ws_pix_dev,devs);
+    for(i=0;i<devCnt;i++)
+    {
+        cdev = &devList.devs[devs[i]];
+        vDevs[i] = cdev;
+        for(j=0;j<cdev->sub_dev_cnt;j++)
+        {
+            pixDev = cdev->pix_devs[j];
+            hwId=pixDev->out_start_id;
+            outs[hwId].fullMap = pixDev->com.vdsm.expected_full_map;
+        }
+        //pixDev->com = cdev->dev_com;
+        //sm = &cdev->dev_com.vdsm;
+    }
+
     while(1)
     {
         do
@@ -557,13 +591,91 @@ void *pix_handler(void* dat)
             {
                 fl_t cn = pkt->dataNtfy.datapt;
                 fl_t cnn;
+                sock_data_msg_t* dt;
+                art_net_pack_t* ap;
                 post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
                 //msgRead(&pb->rq);
                 prnDbg(log_pix,"msg_typ_socket_ntfy msg received\n");
                 while(cn)
                 {
-                    prnDbg(log_pix,"Consumed item %d inPixHandler\n", cn->item.pl.itemId);
+                    dt = cn->item.pl.msg;
+                    ap =  &dt->pl.art;
+                    absAddr = ap->ArtDmxOut.a_net.raw_addr ;
+                    i = findVDevAtAddr(absAddr);
+                    if(i<0)
+                    {
+                        prnErr(log_pix,"No vDev found for addr %u\n",absAddr);
+                        putNode(cn->pb,cn, &cn);
+                        continue;
+                    }
+                    cdev = &devList.devs[i];
+                    sm = &cdev->dev_com.vdsm;
+
+
+
+                    hwId = -1;
+                    for(i=0;i<cdev->sub_dev_cnt;i++)
+                    {
+                        pixDev = cdev->pix_devs[i];
+                        relAddr = absAddr - pixDev->com.start_address;
+                        if(pixDev->com.end_address >= absAddr)
+                        {
+                            hwId = pixDev->out_start_id;
+
+                            if(pixDev->com.vdsm.curr_map & BIT64(relAddr))
+                            {
+                                prnErr(log_pix,"Duplicate Universe %u\n", absAddr);
+                            }
+                            pixDev->com.vdsm.curr_map|= BIT64(relAddr);
+                            sm->curr_map|= BIT64(relAddr) << (i * UNI_PER_OUT);
+                            outs[hwId].dlen+=pixDev->pix_per_uni * (int)pixDev->colCnt;
+                            break;
+                        }
+                    }
+
+                    mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
+                    prnDbg(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
                     putNode(cn->pb,cn, &cn);
+                    if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
+                    {
+                        i = sendOutToMimas(hwId);
+                        prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);
+                        mimas_start_bm|=BIT8(hwId);
+                    }
+                    if(sm->curr_map == sm->expected_full_map)
+                    {
+                        prnDbg(log_pix, "Full pix frame received\n");
+                        i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                        if(i!=0)
+                        {
+                            prnErr(log_pix,"Sent refresh to mimas bm:%X, rc = %d\n", mimas_start_bm, i);
+                        }
+                        else
+                        {
+                            prnDbg(log_pix,"Sent refresh to mimas bm:%X\n", mimas_start_bm);
+                        }
+                        i=0;
+                        while(mimas_start_bm)
+                        {
+                            if(mimas_start_bm & 1)
+                            {
+                               // outs[i].fillMap = 0;
+                               // outs[i].dlen = 0;
+                            }
+                            i++;
+                            mimas_start_bm>>=1;
+                        }
+                        sm->curr_map = 0ull;
+                        for(i=0;i<cdev->sub_dev_cnt;i++)
+                        {
+                            pixDev = cdev->pix_devs[i];
+                            pixDev->com.vdsm.curr_map = 0;
+                            hwId = pixDev->out_start_id;
+                            outs[hwId].fillMap = 0;
+                            outs[hwId].dlen = 0;
+                        }
+                    }
+
                 }
                 break;
             }
@@ -588,6 +700,7 @@ void *pix_handler(void* dat)
         }
         msgRead(&pb->rq);
     }
+    if(devs)free(devs);
 }
 
 void* producer(void* d)
@@ -624,15 +737,11 @@ void* producer(void* d)
     trace_msg_t trm;
     trm.ev = prod_rx_msgs;
     trm.seq = 0;
-
+    #define MMLEN batch
    // i=socket_set_blocking(n->sockfd, 0);
  #define handle_error_en(en, msg) \
                do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
 
-    //CPU_ZERO(&cpuset);
-
-    /*for (i = 0; i < 8; i++)*/
-    //CPU_SET(3, &cpuset);
     ret = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
            if (ret != 0)
                handle_error_en(ret, "Producer pthread_getaffinity_np");
@@ -666,9 +775,6 @@ void* producer(void* d)
         msgs[i].msg_hdr.msg_iov    = &iovecs[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
     }
-
-    #define MMLEN batch
-
     memset(&ntfyCons,0,sizeof(ntfyCons));
     memset(packs,0,sizeof(packs));
     ntfyCons.mtyp = msg_typ_socket_ntfy;
@@ -693,10 +799,9 @@ void* producer(void* d)
             do{
                 msg_need = msgRezerveMultiNB(pkt_pb,&con_node, MMLEN - nodes_avail);
                 msg_need += nodes_avail;
-                //usleep(5);
                 if(msg_need == 0)
                 {
-                    usleep(5000000ul);
+                    usleep(2000000ul);
                     prnErr(log_prod,"No nodes available!!\n");
 
                 }
@@ -719,9 +824,6 @@ void* producer(void* d)
         {
             msg_need = nodes_avail;
         }
-
-
-
         prnLLdetail(nodes, "PROD", "ReadySlots");
         cn = nodes;
         for(i=0;i<msg_need;i++)
@@ -739,10 +841,8 @@ void* producer(void* d)
         {
             prnErr(log_prod,"Serious ERROR: msg_need was %d, only %d were valid\n", msg_need, i);
             msg_need = i;
-            //nodes_avail = msg_need;
         }
 
-        //msg_need = MIN(nodes_avail, batch);
         timeout.tv_sec = 0l;
         timeout.tv_nsec = (2ul * MILIS);
         sm_state_cache = n->sm.state;
@@ -794,57 +894,8 @@ void* producer(void* d)
             else
             {
                 int errLocal;
-            /*
-                int  lockFree=0;
-                int tries=0;
-
-                struct timespec sockerrTs;
-                clock_gettime(CLOCK_REALTIME, &sockerrTs);
-                setSockTimout(n->sockfd, 0);
-                n->sm.DataOk = 0;
-                // create a sys_ev for socket error
-                sys_event_msg_t *sysev;
-                peer_pack_t* p;
-                do
-                {
-                    p = rezerveMsg(&pb->rq);
-                    usleep(5);
-                }while(p == NULL);
-                p->genmtyp = msg_typ_sys_event;
-                p->sys_ev.ev_type = sys_ev_socket_timeout;
-                p->sys_ev.data1 = n->sockfd;
-                msgWritten(&pb->rq);
-                */
-                //if(errno != EAGAIN)
-                //{
-
-                    errLocal = show_socket_error_reason(n->sockfd);
-                    prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
-                    //SmReset(n, eResetUnknown);
-               // }
-               /*
-                else
-                {
-                    do
-                    {
-                        lockFree =  pthread_spin_trylock(&pb->rq.lock) ;
-                    }while((lockFree !=0  )&&(tries++<100));
-                    SmReset(n, eResetSockTimeout);
-                    time(&now);
-                    ts = *localtime(&now);
-                    strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-                    printf("================\nData Timeout(EAGAIN,lock %d) %s\n================\n",lockFree,tsbuf);
-                    if(lockFree==0)pthread_spin_unlock(&pb->rq.lock) ;
-                }
-                errno = 0;
-                msgcnt = 0;
-                mimas_all_black(&outs);
-                usleep( 5000ul );
-                printf("Last rx %ld.%09ld\nLast pp %ld.%09ld\nLast mr %ld.%09ld\nSock er %ld.%09ld\n================\n", \
-                n->last_rx.tv_sec,n->last_rx.tv_nsec, \
-                n->last_pac_proc.tv_sec,n->last_pac_proc.tv_nsec, \
-                n->last_mimas_ref.tv_sec,n->last_mimas_ref.tv_nsec, \
-                sockerrTs.tv_sec,sockerrTs.tv_nsec);*/
+                errLocal = show_socket_error_reason(n->sockfd);
+                prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
             }
         }
     }
@@ -872,7 +923,7 @@ int main(void)
     int res;
     setHandler(fault_handler);
     initLogLevels(DEF_LOG_LVL);
-    setLogLevel(log_con,log_dbg);
+    //setLogLevel(log_pix,log_dbg);
     prnInf(log_any,"BCM lib version = %u\n", bcm2835_version());
   //  bcm2835_set_debug(1);
     int rc = bcm2835_init();
@@ -952,18 +1003,6 @@ int main(void)
     }
     return(0);
 }
-/*
-    in_addr_t sec_ip;
-    struct ifaddrs ipres;
-    sock_sec = socket_init(NULL);
-    if(sock_sec>-1)
-    {
-        add_IP_Address("2.250.250.1");
-        sec_ip =  inet_addr("2.250.250.1");
-        rc = sock_bind(sock_sec, "wlan0",&sec_ip, ARTNET_PORT);
-    }
-*/
-#define PWM_SLEEP_TM 100000u
 
 void pmwTest()
 {

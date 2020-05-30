@@ -62,6 +62,7 @@ inline void mapColor(uint8_t *src, out_def_t *oout, int sUni)
 {
     uint_fast32_t i;
     uint8_t* dst = oout->wrPt[sUni];
+    oout->fillMap|=BIT8(sUni);
     uint8_t il = anetp->artnode->intLimit;
     uint32_t tint;
     if(il == 0 )
