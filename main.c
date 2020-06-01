@@ -1,37 +1,39 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
-#include "rq.h"
-#include "protocolCommon.h"
-#include "utils.h"
-#include "type_defs.h"
 #include <bcm2835.h>
-#include "mimas_cfg.h"
 #include <sys/resource.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 //#include <net/if.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include "recorder.h"
 #include <signal.h>
 #include <sched.h>
 #include <sys/ucontext.h>
 #include <ucontext.h>
 #include <execinfo.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <sys/syscall.h>
-#include <sys/socket.h>
 #include <string.h>
+#include <byteswap.h>
+
+#include "rq.h"
+#include "protocolCommon.h"
+#include "utils.h"
+#include "type_defs.h"
+#include "mimas_cfg.h"
 #include "vdevs.h"
-#include "mimas_cmd_defs.h""
+#include "mimas_cmd_defs.h"
+#include "bm_handling.h"
+
 #define gettid syscall(SYS_gettid)
 
-#include <byteswap.h>
-#include "bm_handling.h"
+
+
 
 pthread_spinlock_t  prnlock=0;
 volatile int upd_pwm = 0;
@@ -225,7 +227,9 @@ void make_a_dev()
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    vd.com.start_address = 1;
+    vd.pixel_count = 4500;
+    vd.pix_per_uni = 150;
+    vd.com.start_address = 80;
     res =build_dev_ws(&vd);
 
     prnDev(res);
@@ -243,7 +247,7 @@ void InitOuts(void)
         outs[i].mappedLen = 0;
         for(j=0; j < UNI_PER_OUT; j++)
         {
-            outs[i].uniLenLimit[j] = (PIX_PER_UNI * CHAN_PER_PIX);
+            outs[i].uniLenLimit[j] = (DEF_PIX_PER_UNI * DEF_CHAN_PER_PIX);
             outs[i].mappedLen += outs[i].uniLenLimit[j];
         }
         outs[i].dlen = 0;
@@ -272,7 +276,7 @@ void* consumer(void* d)
     peer_pack_t         ppack;
     peer_pack_t *pkt =  &ppack;
     uint64_t            peer_id;
-    whole_art_packs_rec_t rec;
+
     app_node_t *artn = (app_node_t*)d;
     post_box_t* pb = artn->artPB;
     node_t *me = artn->artnode;
@@ -335,7 +339,8 @@ void* consumer(void* d)
     printf("CONSUMER TID = %u\n", (uint32_t)gettid);
     ret = setpriority(which, gettid,  CONS_PRIO_NICE );
     printf("Consumer set_nice to (%i) returns %d\n",CONS_PRIO_NICE, ret);
-    struct timespec ts;
+    struct timespec ts_now;
+    long elapsed;
     int cause = 0;
     clock_getres(CLOCK_PROCESS_CPUTIME_ID, &timers[1]);
     printf("ClockRes = %lusec, %u nsec\n", timers[1].tv_sec, timers[1].tv_nsec);
@@ -346,25 +351,37 @@ void* consumer(void* d)
     sockdat_ntfy_t* msg;
     int ticks_to_sleep;
     check_unis = 0;
-    uint32_t unirvced = 0;
+    ticks_to_sleep = 6;
+    clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
     while(1)
     {
         cdev = NULL;
-        ticks_to_sleep = 0;
+
         memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
         do
         {
             pkt = getMsg(&sock_pb->rq);
             if(pkt == NULL)
             {
-                if(++ticks_to_sleep == 5)
+                if(ticks_to_sleep<5)ticks_to_sleep++;
+                if(ticks_to_sleep == 5)
                 {
-                    usleep(5ul);
-                    ticks_to_sleep=0;
+                    clock_gettime(CLOCK_REALTIME, &ts_now);
+                    elapsed = nsec_diff(&ts_now, &trms[0]->ts);
+                    if(elapsed > CONS_TOV)
+                    {
+                        clearBM(devList.tmp_uni_map);
+                        clearBM(devList.glo_uni_map);
+                        check_unis=0;
+                        ticks_to_sleep++;
+                        trms[0]->ts = ts_now;
+                        prnFinf(log_con, "Elapsed ovf : %ld nsec\n", elapsed );
+                    }
                 }
             }
         }while(pkt == NULL);
         clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
+        ticks_to_sleep = 0;
         switch(pkt->genmtyp)
         {
             case msg_typ_socket_data:
@@ -432,7 +449,7 @@ void* consumer(void* d)
         {
             nodecnt++;
             dt = cn->item.pl.msg;
-            peer_id = (*(uint64_t*)&dt->sender.sin_port) & 0xFFFFFFFFFFFF;
+            peer_id = (*(uint64_t*)&dt->sender);
             ap =  &dt->pl.art;
             art_res = ArtNetDecode(ap);
             switch(art_res)
@@ -498,6 +515,17 @@ void* consumer(void* d)
                     }   // end of devices loop
                     break;
                 } // end of art_res switch
+                case art_poll_e:
+                {
+                        addToBranch(localBr, cn);
+                        break;
+                }
+                case art_syn_pack_e:
+                {
+                    prnErr(log_con, "A SYNC!!!!\n");
+                    addToBranch(dropBr,cn);
+                    break;
+                }
                 default:
                 {
                     prnErr(log_con,"\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
@@ -538,6 +566,13 @@ void* consumer(void* d)
             j = putNodes(dropBr->hd->pb, dropBr->hd);
             prnDbg(log_con,"Dropped %d unamapped Pkts\n",j);
         }
+        if(localBr->hd)
+        {
+            localBr->lst->nxt = NULL;
+            make_artnet_resp(localBr->hd->item.pl.msg);
+            j = putNodes(localBr->hd->pb, localBr->hd);
+        }
+
     }
         //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full)
 }
@@ -546,9 +581,32 @@ void *pix_handler(void* dat)
 {
     post_box_t*         pb = pix_pb;
     peer_pack_t*        pkt;
+    #define handle_error_en(en, msg) \
+               do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+
+   /* Check the actual affinity mask assigned to the thread */
+   cpu_set_t cpuset;
+   int ret;
+   ret = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+   if (ret != 0)
+       handle_error_en(ret, "pthread_getaffinity_np");
+
+   int j =1;
+   int i;
+   for (i = 0; i < 8; i++)
+   {
+       if((cpuset.__bits[0] & j) !=0)
+           printf("CPU %d, ", i);
+        j<<=1;
+    }
+
+    prnFinf(log_pix, "PIXHAN TID = %u\n", (uint32_t)gettid);
+    ret = setpriority(PRIO_PROCESS, gettid,  PIXHAN_PRIO );
+    prnFinf(log_pix, "PIXHAN set_nice to (%i) returns %d\n",PIXHAN_PRIO, ret);
+
     prnFinf(log_pix,"PixHandler started...\n");
     int* devs = NULL;
-    int devCnt, i, j;
+    int devCnt;
     mimas_out_dev_t** vDevs;
     mimas_out_dev_t* cdev;
     vdev_sm_t*  sm;
@@ -610,9 +668,6 @@ void *pix_handler(void* dat)
                     }
                     cdev = &devList.devs[i];
                     sm = &cdev->dev_com.vdsm;
-
-
-
                     hwId = -1;
                     for(i=0;i<cdev->sub_dev_cnt;i++)
                     {
@@ -714,7 +769,6 @@ void* producer(void* d)
     sock_data_msg_t     *pktPtr;
     app_node_t* artn = (app_node_t*)d;
     node_t*             n = artn->artnode;
-    post_box_t*         pb = artn->artPB;
     int mysock =        n->sockfd;
     mimas_state_t       mSt;
     int                 addr_len, ret;
@@ -1006,6 +1060,7 @@ int main(void)
 
 void pmwTest()
 {
+    prnFinf(log_pwm,"PWM Handler Starting...\n");
     pwm_group_data_t pwm_d[MIMAS_PWM_GROUP_CNT];
     memset((void*)pwm_d, 0, sizeof(pwm_group_data_t)* MIMAS_PWM_GROUP_CNT);
     post_box_t* pb = pwm_pb;
@@ -1014,15 +1069,35 @@ void pmwTest()
     uint8_t enable_msk[MIMAS_PWM_GROUP_CNT];
     pwms[0] = getMimasPwmDevices();
     pwms[1]  = pwms[0]+1;
+    int devIdx[MAX_VDEV_CNT];
+    int devCnt, j, k, i, gDevCnt;
     pwm_pb = pb;
     peer_pack_t *pkt;
-    art_resp_e  art_res;
-    //peer_pack_t pack;
-    int devIdx[MAX_VDEV_CNT];
-    int devCnt, j, k;
-    gen_addres_u    raw_addr;
-    pwm_vdev_t *cdev;
+    int* devs = NULL;
+    mimas_out_dev_t**   vDevs;
+    mimas_out_dev_t*    cdev;
+    pwm_vdev_t*         pwmDev;
+    int                 hwId=-1;
+    //uint16_t        mimas_start_bm=0;
+    addressing_t    absAddr, relAddr;
 
+    do
+    {
+        gDevCnt = findVDevsOfType(pwm_dev,NULL);
+        if(gDevCnt<1) usleep(100000ul);
+    }while(gDevCnt<1);
+    devs = (int*)calloc(gDevCnt,sizeof(int));
+    vDevs = (mimas_out_dev_t*)calloc(gDevCnt,sizeof(mimas_out_dev_t*));
+    findVDevsOfType(pwm_dev,devs);
+    for(i=0;i<gDevCnt;i++)
+    {
+        cdev = &devList.devs[devs[i]];
+        vDevs[i] = cdev;
+        cdev->dev_com.vdsm.expected_full_map = 1ul;
+    }
+
+
+    //peer_pack_t pack;
 
     pwm_d[0].gctrl =1;
     pwm_d[0].div = 39u;
@@ -1122,25 +1197,110 @@ void pmwTest()
             {
                 fl_t cn = pkt->dataNtfy.datapt;
                 fl_t cnn;
-                post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
-                sock_data_msg_t  sd;
+                sock_data_msg_t* dt;
                 art_net_pack_t* ap;
+                post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
+                uint16_t tVal;
+                uint8_t* datapt;
+                uint8_t  chId;
+                prnDbg(log_pwm,"msg_typ_socket_ntfy msg received\n");
                 while(cn)
                 {
-                    sd =*(sock_data_msg_t*)cn->item.pl.msg;
-                    putNode(cn->pb,cn, &cn);
-                    ap =  &sd.pl.art;
-                    art_res = ArtNetDecode(ap);
+                    dt = cn->item.pl.msg;
+                    ap =  &dt->pl.art;
+                    absAddr = ap->ArtDmxOut.a_net.raw_addr ;
 
+                    devCnt = findVDevsAtAddr(absAddr, &devIdx);
+
+                    pwm_ch_data_t* cd;
+                    pwm_out_dev_t* hpwm = GET_PWMS_PTR;
+                   // printf("found %d pwmDevices\n", devCnt);
+                    for(k=0;k<devCnt;k++)
+                    {
+                        pwmDev = devList.devs[devIdx[k]].pwm_vdev;
+
+                        if ((pwmDev!=NULL) && (pwmDev->com.dev_type == pwm_dev))
+                        {
+                            relAddr = absAddr - pwmDev->com.start_address;
+                            if(devList.devs[devIdx[k]].dev_com.vdsm.curr_map & BIT64(relAddr))
+                            {
+                                prnErr(log_pwm,"Duplicate Universe %u on DevId %d\n", absAddr, devIdx[k]);
+                            }
+                            devList.devs[devIdx[k]].dev_com.vdsm.curr_map |= BIT64(relAddr);
+                            // send to mimas
+                            chId = pwmDev->hwStartIdx;
+                            datapt = &ap->ArtDmxOut.dmx[pwmDev->com.start_offset];
+                            for(j=0;j< pwmDev->ch_count; j++)
+                            {
+
+                                cd = &hpwm[chId/MIMAS_PWM_OUT_PER_GRP_CNT].ch_data[chId&7];
+                                tVal = pwmMapValue(pwmDev , j, datapt);
+                                if(tVal!=pwm_d[cd->phyGrp].ch_pers[cd->phyIdx])
+                                {
+                                    if(pwm_d[cd->phyGrp].needUpdate == 0)
+                                    {
+                                        pwm_d[cd->phyGrp].needUpdate = 1;
+                                        //TODO: if a vDev spans across 2 hwDevs, verify chId
+                                        pwm_d[cd->phyGrp].startUpdIdx = chId & (BIT8(MIMAS_PWM_OUT_PER_GRP_CNT) - 1u);
+                                    }
+                                    pwm_d[cd->phyGrp].ch_pers[cd->phyIdx] = tVal;
+                                    pwm_d[cd->phyGrp].UpdChCount++;
+                                    pwm_d[cd->phyGrp].ch_ctrls[cd->phyIdx] = 1;
+                                    pwm_d[cd->phyGrp].sleep_count[cd->phyIdx] = pwm_d[cd->phyGrp].sleep_time[cd->phyIdx];
+                                    //printf("Dev %d, ch %d inV %u outV %u\n", k, j, bswap_16(*(uint16_t*)datapt), tVal);
+                                }
+                                //setPwmVal(cdev->pwm_vdev , j, datapt);
+                                if(cd->_16bits!=0)datapt++;
+                                datapt++;
+                                chId++;
+                            }
+                         }
+                    }
+                    putNode(cn->pb,cn, &cn);
+                    //prnFinf(log_pwm, "PWM data ready\n");
                 }
+                for(k=0;k<gDevCnt;k++)
+                {
+                   // devList.devs[devIdx[k]].dev_com.vdsm.curr_map  = 0;
+                   vDevs[k]->dev_com.vdsm.curr_map = 0llu;
+                }
+                clock_gettime(CLOCK_REALTIME, &ts[1]);
+                for(k=0;k<MIMAS_PWM_GROUP_CNT;k++)
+                {
+                    if(pwm_d[k].needUpdate)
+                    {
+                        j = mimas_store_pwm_val( \
+                                        BIT8(k), \
+                                        pwm_d[k].startUpdIdx, \
+                                        &pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
+                                        pwm_d[k].UpdChCount);
+
+                        j = mimas_store_pwm_chCntrol(BIT8(k), \
+                                        pwm_d[k].startUpdIdx, \
+                                        &pwm_d[k].ch_ctrls[pwm_d[k].startUpdIdx], \
+                                        pwm_d[k].UpdChCount);
+                        if(j)
+                        {
+                            printf("mimas_send_err % d in %d\n",j, __LINE__);
+                        }
+                        else
+                        {
+                            //printf("sending PWM data to mimas vDev %d\n",j);
+                        }
+                        pwm_d[k].UpdChCount = 0;
+                        pwm_d[k].needUpdate = 0;
+                    }
+                }
+                clock_gettime(CLOCK_REALTIME, &ts[2]);
                 break;
             }
+/*
             case msg_typ_socket_data:
             {
-/*
+
                 art_net_pack_t* dat = &pack.artn_msg.pl.art;
 
-                art_res = ArtNetDecode(dat);
+                //art_res = ArtNetDecode(dat);
                 cdev = NULL;
 
                 //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full);
@@ -1227,9 +1387,9 @@ void pmwTest()
                     {
 
                     }
-                }*/
+                }
                 break;
-            }
+            }*/
             case msg_typ_sys_event:
             {
                 break;

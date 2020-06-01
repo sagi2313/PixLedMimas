@@ -57,7 +57,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
 {
     if((wsdev->pix_per_uni==0)||(wsdev->pix_per_uni>170))
     {
-        wsdev->pix_per_uni = PIX_PER_UNI;
+        wsdev->pix_per_uni = DEF_PIX_PER_UNI;
     }
     uint32_t uni_need;
     uint32_t out_need, res;
@@ -340,7 +340,7 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     pwmdev->com.end_offset = offset;
     cfg->com.dev_type = pwm_dev;
     cfg->com.vDevIdx = idx;
-    if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
+    //if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
     addAddrUsage(devList.devs[idx].dev_com.start_address,devList.devs[idx].pwm_vdev->com.start_offset, offset);
     if(devList.last_used_idx<idx)devList.last_used_idx = idx;
     vdev_sm_t* vdsm = &devList.devs[idx].dev_com.vdsm;
@@ -432,11 +432,14 @@ int findVDevsOfType(vdevs_e typ, int* idxs)
 int vDevSetPeer(uint64_t peer,int vDevId)
 {
 mimas_out_dev_t* vDev  = &devList.devs[vDevId];
-
+uint64_t peer_mask;
 #ifdef PEER_IP_ONLY
-peer = (peer>>=16) & 0xFFFFFFFFul;
+peer_mask = 0xFFFFFFFF0000ul;
+#else
+ peer_mask = 0xFFFFFFFFFFFFul;
 #endif
-    if(vDev->peer_id != peer)
+    peer>>=16;
+    if( (vDev->peer_id &peer_mask) != (peer & peer_mask))
     {
         if(vDev->peer_state == 0)
         {

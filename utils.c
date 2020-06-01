@@ -925,8 +925,8 @@ void NodeInit(app_node_t* an, uint8_t maxUniCount, addressing_t start_uni_addr)
     Node = n;
     n->current_if_idx = n->ifs.curr_if_idx;
     node_interfaces_detail_t *cIfDet = &n->ifs.ifs[n->ifs.curr_if_idx];
-    n->art_start_uni =start_uni_addr;
-    n->universe_count = maxUniCount;
+    //n->art_start_uni =start_uni_addr;
+    //n->universe_count = maxUniCount;
     snprintf(n->longName,63,"%s pixel Controler by Sagi. Node romName %s-%u-%X%X\0\0",NODE_NAME_DEF, NODE_NAME_DEF,NODE_VERSION, cIfDet->mac[4], cIfDet->mac[5]);
     snprintf(n->nodeName,16,"%s-%u-%X%X\0",NODE_NAME_DEF,NODE_VERSION, cIfDet->mac[4], cIfDet->mac[5]);
     strcpy(n->userName, n->nodeName);
@@ -1075,5 +1075,18 @@ void* one_sec(void* d)
             usleep(100000 - sleefor); // every 100mSec
         }
     }
+}
+
+inline long nsec_diff(struct timespec *now, struct timespec *be4)
+{
+    struct timespec diff;
+    diff.tv_nsec = now->tv_nsec - be4->tv_nsec;
+    diff.tv_sec = now->tv_sec - be4->tv_sec;
+    if(diff.tv_nsec < 0l)
+    {
+        diff.tv_sec--;
+        diff.tv_nsec  = 1000000000l + diff.tv_nsec;
+    }
+    return( ((long)(diff.tv_sec)*1000000000l) + diff.tv_nsec );
 }
 

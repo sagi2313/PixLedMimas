@@ -27,6 +27,7 @@
 
 #define ARTNET_PORT (uint16_t)0x1936
 #define ARTNET_ID	(const char*) "Art-Net\0"
+#define ARTNET_ID_RAW (*(uint64_t*)("Art-Net\0"))
 
 
 #define prtDMX512	(uint8_t)0

@@ -158,8 +158,8 @@ typedef struct
     uint64_t            peer_id:48;
     uint64_t            peer_state:2; /* never set=0, active = 1 */
     uint64_t            peer_dc:14;
-    uint8_t           sub_dev_cnt;
-    uint8_t           uni_count;
+    uint8_t             sub_dev_cnt;
+    uint8_t             uni_count;
     union
     {
         uint16_t    pixel_count;

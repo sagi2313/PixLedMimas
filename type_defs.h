@@ -28,6 +28,7 @@
 #include <semaphore.h>
 #include <stdint-gcc.h>
 #include <stdint.h>
+#include "sys_defs.h"
 #include "mimas_cfg.h"
 //#include "protocolCommon.h"
 
@@ -47,19 +48,12 @@
 #define BIT8(B)  ( (uint8_t)( ((uint32_t)1U)<<((uint32_t)(B)) )  & 0xFF)
 #endif
 
-
-#define     GLOBAL_OUTPUTS_MAX 24
-#define     UNI_PER_OUT 5
-
-#define NODE_VERSION ((uint16_t)0x0001)
-#define NODE_NAME_DEF   ((const char*)"PixLed\0")
-
-#define PIX_PER_UNI     (150)
-#define CHAN_PER_PIX    (3)
-
-
 #define MMLEN_MMAX   40
-#define MILIS   (1000000ul)
+
+#define MBYTES ( 1024ul * 1024ul)
+
+#define MILIS   (1000000l)
+#define CONS_TOV (500l * MILIS)
 
 typedef enum
 {
@@ -236,9 +230,7 @@ typedef struct
     sock_info_t     mySock;
     pthread_t       con_tid;
     pthread_t       prod_tid;
-    addressing_t    art_start_uni;
     uint8_t         intLimit; // intensity limit
-    uint8_t         universe_count;
     uint8_t         current_if_idx;
     node_interfaces_t ifs;
     char            nodeName[16];
@@ -250,7 +242,6 @@ typedef struct
     uint32_t        packetsCnt;
     float           fps;
     uint32_t        frames;
-    uint32_t        barr[8];
     struct timespec last_rx;
     struct timespec last_pac_proc;
     struct timespec last_mimas_ref;
@@ -258,8 +249,6 @@ typedef struct
 
 #include "artNet.h"
 #include "sacn.h"
-
-#define MBYTES ( 1024ul * 1024ul)
 
 typedef union
 {

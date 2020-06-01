@@ -8,6 +8,7 @@
 #include <time.h>
 #define PROD_PRIO_NICE (-12)
 #define CONS_PRIO_NICE (-18)
+#define PIXHAN_PRIO     (-15)
 
 #define MIMAS_RESET do{\
     bcm2835_gpio_set(MIMAS_RST); \
@@ -16,10 +17,6 @@
     bcm2835_delayMicroseconds(10000ull); \
     bcm2835_gpio_set(MIMAS_RST);}while(0);
 
-extern pthread_spinlock_t  prnlock;
-extern uint32_t  LogMask;
-const char *ll_str[];
-const char *ls_str[];
 
 typedef enum
 {
@@ -46,6 +43,10 @@ typedef enum
 }log_src_e;
 
 
+extern pthread_spinlock_t  prnlock;
+extern uint32_t  LogMask;
+extern const char *ll_str[];
+extern const char *ls_str[];
 extern log_lvl_e LogLvl[];
 
 #define prnLock pthread_spin_lock(&prnlock)
@@ -64,10 +65,11 @@ do{ \
 #define  prnDbg( LS,  ...) prn(log_dbg, LS,  __VA_ARGS__)
 #define  prnInf( LS,  ...) prn(log_info, LS,  __VA_ARGS__)
 #define  prnFinf( LS,  ...) prn(log_finf, LS,  __VA_ARGS__)
-#define  prnErr( LS,  ...) prn(log_dbg, LS,  __VA_ARGS__)
+#define  prnErr( LS,  ...) prn(log_err, LS,  __VA_ARGS__)
 
 #define DEF_LOG_LVL log_err
 #define PWM_SLEEP_TM 100000u
+long nsec_diff(struct timespec *now, struct timespec *be4);
 
 void initLogLevels(log_lvl_e lvl);
 log_lvl_e getLogLevel(log_src_e src);
