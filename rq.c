@@ -13,7 +13,7 @@ post_box_t* createPB_RQ(uint32_t count, const char* name, uint8_t* rqs, uint32_t
     if(name!=NULL)strncat(pb->pbName, name, 31);
     pb->pbTyp = pb_rq_e;
     memset((void*)(&pb->rq), 0, sizeof(rq_head_t));
-
+    pb->rq.low_mark = count;
     pb->rq.count = 0;
     pb->rq.genQ = rqs;
     pb->rq.head = (pb->rq.head - 1)& (count-1u);
@@ -35,6 +35,7 @@ post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_
     memset((void*)(&pb->ll), 0, sizeof(ll_pb_t));
     pb->ll.box.count = 0;
     pb->ll.box.maxCount = count;
+    pb->ll.box.low_mark = count;
     pb->ll.box.head = NULL;
     pb->ll.box.tail = NULL;
 
@@ -42,6 +43,7 @@ post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_
     pb->ll.pile.head = (fl_t)calloc(count, sizeof(freeList_t));
     pb->ll.pile.count = count;
     pb->ll.pile.maxCount = count;
+    pb->ll.pile.low_mark = count;
     fl_t n = pb->ll.pile.head;
     for(i=0;i<count-1;i++)
     {
@@ -322,7 +324,7 @@ uint32_t putNode(post_box_t* pb, fl_t nd, fl_t *nnd)
 {
 	//__sync_fetch_and_add(&hd->count, 1ul);
 	//
-	uint32_t cnt;
+	uint32_t cnt = 0;
 	if( unlikely(pb == NULL)) return 0;
 	fl_head_t* hd = &pb->ll.pile;
 	if( unlikely(hd == NULL)) return 0;
@@ -341,7 +343,7 @@ uint32_t putNode(post_box_t* pb, fl_t nd, fl_t *nnd)
 	}
 
 	cnt = hd->count;
-	prnDbg(log_ll,"\t\t\t\t\t PBput:%s Item %u, Rem %d\n",pb->pbName,  nd->item.pl.itemId, hd->count);
+	prnInf(log_ll,"PBput:%s Item %u, Rem %d\n",pb->pbName,  nd->item.pl.itemId, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
@@ -371,7 +373,7 @@ uint32_t putNodes(post_box_t* pb, fl_t nd)
 		hd->tail = nd;
 	}
 	hd->count+=cnt;
-	prnDbg(log_ll,"\t\t\t\t\t PBputMany:%s Rem %d\n",pb->pbName, hd->count);
+	prnFinf(log_ll,"PBputMany:%s Rem %d\n",pb->pbName, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);
@@ -478,29 +480,35 @@ fl_t msgRezerveNB(post_box_t* pb)
 int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
 {
     uint32_t cnt =0;
+
     fl_head_t* hd = &pb->ll.pile;
     pthread_spin_lock(&hd->lock);
 	if(hd->head==NULL)
 	{
 		if(unlikely( hd->count!=0 ) ) /*sanity + debugging check */
 		{
-			prnErr(log_ll,"File %s, Line:%d Head Null, count %u in %p\n",__FILE__,__LINE__,hd->count, hd);
+			prnErr(log_ll,"File %s, Line:%d Head (%s) Null, count %u in %p\n",__FILE__,__LINE__, pb->pbName,hd->count, hd);
 			hd->count = 0;
 		}
 		pthread_spin_unlock(&hd->lock);
-		return(NULL);
+		*nodes = NULL;
+		return(0);
 	}
 	fl_t nd =  hd->head;
     *nodes = hd->head;
     if(count>=hd->count)
     {
-        prnInf(log_ll,"LowBuffer\n");
+        prnErr(log_ll,"LowBuffer(%s:%d/%d)\n", pb->pbName,hd->count, hd->maxCount);
         count = hd->count;
     }
 	while(nd)
     {
-        if(++cnt == count)break;
+        if((++cnt == count) || (nd == NULL))break;
         nd = nd->nxt;
+    }
+    if(nd == NULL)
+    {
+        prnErr(log_ll,"NULL node(%s)...\n", pb->pbName);
     }
     hd->count -= cnt;
     if(hd->count> hd->maxCount)
@@ -517,26 +525,34 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
         hd->head = nd->nxt;
         nd->nxt = NULL;
     }
-    prnDbg(log_ll,"\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
+    if(hd->count < hd->low_mark)
+    {
+        hd->low_mark = hd->count;
+        prnErr(log_ll,"LL %s low mark dropped: %d!\n", pb->pbName, hd->low_mark);
+    }
+    //prnDbg(log_ll,"\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 }
 
 void prnLLdetail(fl_t br, char* WHO, char* name)
 {
-    prnInf(log_ll,"%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
+    if(getLogLevel(log_ll)>log_info) return;
+    prnLock;
+    printf("%s: Branch(%s) info : \n\t", (WHO!=NULL?WHO:"?"),(name!=NULL?name:"?"));
     int cnt=0;
     peer_pack_t *pkt;
     sock_data_msg_t* dt;
     while(br)
     {
         dt = br->item.pl.msg;
-        prnInf(log_ll,"%3u(%u), " , br->item.pl.itemId, dt->pl.art.ArtDmxOut.a_net.raw_addr);
+        printf("%3u(%u), " , br->item.pl.itemId, dt->pl.art.ArtDmxOut.a_net.raw_addr);
         br = br->nxt;
         cnt++;
         //if((++cnt & 3) == 3)printf("\n\t");
     }
-    prnInf(log_ll," Sum %d \n", cnt);
+    printf(" Sum %d \n", cnt);
+    prnUnlock;
 }
 
 void addToBranch(node_branch_t* br, fl_t nd)

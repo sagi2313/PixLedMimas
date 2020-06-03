@@ -33,7 +33,7 @@
 #include "utils.h"
 #include <byteswap.h>
 #include <pthread.h>
-
+#include <stdatomic.h>
 static int fd = -1;
 int bits=8;
 //uint8_t mimas[8][DATABYTES + 4];
@@ -47,9 +47,23 @@ uint_fast64_t spin_hit=0ul;
 uint_fast64_t unlock_sleep;
 static	pthread_spinlock_t  spilock;
 
+//#define MIMAS_TIME_STAT
+
+void getSpinStats(uint64_t* tryCol, uint64_t* blocked, uint64_t* hits)
+{
+    *tryCol =spin_trycolission;
+    *blocked = spin_blocks;
+    *hits = spin_hit;
+
+}
+
 inline static int spi_lock(void)
 {
     int_fast32_t rc, c;
+#ifdef MIMAS_TIME_STAT
+    struct timespec ts[2];
+    clock_gettime(CLOCK_REALTIME, &ts[0]);
+#endif
     c=0;
     spin_hit++;
     do{
@@ -65,75 +79,95 @@ inline static int spi_lock(void)
         rc = pthread_spin_lock(&spilock);
         if(rc)
         {
-            perror("failed to aquire spilock");
+#ifdef MIMAS_TIME_STAT
+            clock_gettime(CLOCK_REALTIME, &ts[1]);
+            prnErr(log_mim, "Spin failed after %ld nSec\n", nsec_diff(&ts[1], &ts[0]));
+#else
+            prnErr(log_mim, "Spin failed \n");
+#endif
             return(-1);
         }
     }
+    char tsbuf[80];
+    time_t now;
+    struct tm tsepo;
     mimas_state_t mSt;
     mSt = mimas_get_state();
-    if( mSt.idle == 1 )
+    c = 0;
+    while( mSt.idle == 1 )
     {
         do
         {
+            usleep((useconds_t)1);
             mimas_prn_state(&mSt);
-            time_t now;
-            time(&now);
-            struct tm ts = *localtime(&now);
-            char tsbuf[80];
-            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
-            MIMAS_RESET
-            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__, __LINE__, tsbuf);
-            bcm2835_delayMicroseconds(10000ull);
             mSt = mimas_get_state();
             mimas_prn_state(&mSt);
-        }while(mSt.idle==1);
-       /* if(mSt.idle)
+        }while((mSt.idle==1) && (++c<250000));
+        if( mSt.idle == 1 )
         {
-            rc = pthread_spin_unlock(&spilock);
-            if(rc)
-            {
-                perror("failed to leave spilock");
-            }
-            return(-110);
-        }*/
+            MIMAS_RESET
+            time(&now);
+            tsepo = *localtime(&now);
+            strftime(tsbuf, sizeof(tsbuf), "%T", &tsepo);
+            prnErr(log_mim, "WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__, __LINE__, tsbuf);
+            usleep((useconds_t)1500);
+            c=0;
+        }
     }
+
     int loops = 0;
+    volatile uint_fast64_t delayns;
     while( mSt.sys_rdy == 0 )
     {
-        if(++loops > 250) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
+        delayns = 0llu;
+        if(++loops > 5000) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
         {
-            printf("Mimas stuck badly!\n");
+            prnErr(log_mim,"Mimas stuck badly!\n");
             mimas_prn_state(&mSt);
-            time_t now;
             time(&now);
-            struct tm ts = *localtime(&now);
-            char tsbuf[80];
-            strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+            tsepo = *localtime(&now);
+            strftime(tsbuf, sizeof(tsbuf), "%T", &tsepo);
             MIMAS_RESET
-            printf("WARNING(%s): mimas reset in line:%d at %s\n", __FUNCTION__,__LINE__, tsbuf);
-            bcm2835_delayMicroseconds(10000ull);
+            prnErr(log_mim,"WARNING(%s): mimas reset in line:%d at %s, state after reset:\n", __FUNCTION__,__LINE__, tsbuf);
+            usleep((useconds_t)1500);
             mSt =mimas_get_state();
             mimas_prn_state(&mSt);
             rc = pthread_spin_unlock(&spilock);
             if(rc)
             {
-                perror("failed to leave spilock");
+                perror("failed to unlock spilock");
             }
+#ifdef MIMAS_TIME_STAT
+            clock_gettime(CLOCK_REALTIME, &ts[1]);
+            prnErr(log_mim, "Spin failed2 after %ld nSec\n", nsec_diff(&ts[1], &ts[0]));
+#else
+            prnErr(log_mim, "Spin failed stage2\n");
+#endif
             return(-100);
         }
-        bcm2835_delayMicroseconds(100ull);
+        //usleep((useconds_t )1);
+        while(++delayns < 10000llu);
         mSt =mimas_get_state();
      }
+#ifdef MIMAS_TIME_STAT
+     clock_gettime(CLOCK_REALTIME, &ts[1]);
+     prnFinf(log_mim, "Spin taken by %d after %ld nSec, loops = %d, c = %d\n",gettid, nsec_diff(&ts[1], &ts[0]), loops, c);
+#endif
      return 0;
 }
 
 inline static void spi_unlock(void)
 {
     int rc = pthread_spin_unlock(&spilock);
+
     if(rc)
     {
         perror("failed to leave spilock");
+        return;
     }
+#ifdef MIMAS_TIME_STAT
+    prnFinf(log_mim, "Spin returned by %d\n",gettid);
+#endif
 }
 
 static void pabort(const char *s)
@@ -408,9 +442,12 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
 int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
 {
     if(fd == -1)return(-1);
+#ifdef MIMAS_TIME_STAT
+    struct timespec ts[2];
+    clock_gettime(CLOCK_REALTIME, &ts[0]);
+#endif
     int i, ret;
-    //struct timespec ts[4];
-    //clock_gettime(CLOCK_REALTIME, &ts[0]);
+
     if(start_bm == 0 ) return(-3);
     start_bm &= MIMAS_STREAM_BM;
     proto_bm &= MIMAS_STREAM_BM;
@@ -418,147 +455,61 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
     uint16_t temp_bm=0;
     uint8_t *ch;
     if(spi_lock()!=0) return(-1000);
-    /*unlock_sleep=0llu;*/
+
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         if((start_bm & BIT32(i))==0)continue;
         if(tr[i].len>0)
         {
             ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[i]);
-            /*unlock_sleep+=tr[i].len;*/
             if (ret < 1)
             {
-                printf("error %d sending pack(%u), len = %u , errno %d\n", ret, i, tr[i].len, errno );
+                prnErr(log_mim,"error %d sending pack(%u), len = %u , errno %d\n", ret, i, tr[i].len, errno );
                 errno =0;
             }
-            else{
-            //ch = (uint8_t*)(tr[i].tx_buf);
-            //temp_bm|=ch[1];
-            //temp_bm|=(ch[2] & 0xF0) << 8;
-            temp_bm|=(uint16_t)BIT32(i);
+            else
+            {
+                temp_bm|=(uint16_t)BIT32(i);
             }
         }
-        else{
-            printf("WARNING: tr[%d] len = %d\n",i,tr[i].len);
+        else
+        {
+            prnErr(log_mim,"WARNING: tr[%d] len = %d\n",i,tr[i].len);
         }
     }
-
-    //clock_gettime(CLOCK_REALTIME, &ts[1]);
     if(temp_bm!=start_bm)
     {
-        printf("WARNING: spi : data_bm %x != start_bm %x\n", temp_bm, start_bm);
+        prnErr(log_mim,"WARNING: spi : data_bm %x != start_bm %x\n", temp_bm, start_bm);
         temp_bm&=start_bm;
         if(temp_bm == 0 )
         {
-            printf("ERROR: spi: nothing to send, aborting\n");
+            prnErr(log_mim,"ERROR: spi: nothing to send, aborting\n");
             spi_unlock();
             return(-2);
         }
     }
-    start_stream_header[1]= temp_bm  & 0xFF; /// use the  value that probably wont crash mimas
+    start_stream_header[1]= temp_bm  & 0xFF; // use the  value that probably wont crash mimas
     start_stream_header[2]= ((temp_bm >> 4) & 0xF0);
     start_stream_header[2]|= (proto_bm>> 8);
     start_stream_header[3] = proto_bm & 0xFF;
-   // printf("MIMAS start %X\n", start_bm);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);
-    /*unlock_sleep /8llu;
-    if(unlock_sleep==0llu)unlock_sleep=1llu;
-    bcm2835_delayMicroseconds(unlock_sleep);*/
     spi_unlock();
     if (ret < 1)
     {
-        pabort("can't send spi message");
+        prnErr(log_mim,"can't send spi message");
         return (-3);
     }
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         if(tr[i].len>0)tr[i].len = 0u;
     }
-    //clock_gettime(CLOCK_REALTIME, &ts[2]);
-    //printf("spi times: %ld | %ld \n", ts[1].tv_nsec - ts[0].tv_nsec, ts[2].tv_nsec - ts[0].tv_nsec);
-    return(0);
+#ifdef MIMAS_TIME_STAT
+    clock_gettime(CLOCK_REALTIME, &ts[1]);
+    prnFinf(log_mim,"mimas refresh took %ld\n", nsec_diff(&ts[1], &ts[0]));
+#endif
+   return(0);
 }
-/*
-int spi_main(int argc, char *argv[])
-{
-	int ret = 0;
-	int fd;
-	int i=0, j;
 
-	//parse_opts(argc, argv);
-	memset(tr,0,sizeof(tr));
-    tr[8].tx_buf = (unsigned long)(void*)&mimas[0][0];
-	tr[8].rx_buf = (unsigned long)(void*)NULL;
-	tr[8].len = 4;
-	tr[8].delay_usecs = 20;
-	tr[8].speed_hz = speed;
-	tr[8].bits_per_word = 8;
-	mimas[8][0] = 0x80;
-	mimas[8][1] = 0xFF;
-	mimas[8][2] = 0;
-	mimas[8][3] = 0;
-	for(i=0;i<8;i++)
-	{
-	  tr[i].tx_buf = (unsigned long)(void*)&mimas[i][0];
-	  tr[i].rx_buf = (unsigned long)(void*)NULL;
-	  tr[i].len =DATABYTES + 4;
-	  tr[i].delay_usecs = delay;
-	  tr[i].speed_hz = speed;
-	  tr[i].bits_per_word = bits;
-	  mimas[i][0]=0x10;
-	  mimas[i][1]=(1<<i);
-	  mimas[i][2]=(uint8_t)(DATABYTES/256);
-	  mimas[i][3]=(uint8_t)(DATABYTES%256);
-	}
-	for(j=0;j<8;j++)
-	{
-		for(i=4;i<(4u + DATABYTES);i++)
-		{
-			mimas[j][i]=i%101;
-		}
-	}
-
-
-	fd = open(device, O_RDWR);
-	if (fd < 0)
-		pabort("can't open device!!");
-
-	ret = ioctl(fd, SPI_IOC_WR_MODE, &mode);
-	if (ret == -1)
-		pabort("can't set spi mode");
-
-	ret = ioctl(fd, SPI_IOC_RD_MODE, &mode);
-	if (ret == -1)
-		pabort("can't get spi mode");
-
-	ret = ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
-	if (ret == -1)
-		pabort("can't set bits per word");
-
-	ret = ioctl(fd, SPI_IOC_RD_BITS_PER_WORD, &bits);
-	if (ret == -1)
-		pabort("can't get bits per word");
-
-	ret = ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
-	if (ret == -1)
-		pabort("can't set max speed hz");
-	printf("Max WR speed %u\n",speed);
-	ret = ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed);
-	if (ret == -1)
-		pabort("can't get max speed hz");
-	printf("Max RD speed %u\n",speed);
-
-	printf("spi mode: %d\n", mode);
-	printf("bits per word: %d\n", bits);
-	printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);
-	printf("sending %u bytes(%x, %x)\n",DATABYTES + 4, mimas[2], mimas[3]);
-	transfer(fd);
-
-	close(fd);
-
-	return ret;
-}
-*/
 int initSPI(void)
 {
     uint8_t cs_change = 0;
@@ -653,6 +604,9 @@ int initSPI(void)
 
 return(0);
 }
+
+
+
 /*
 int initSPI(void)
 {

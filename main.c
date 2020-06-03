@@ -30,11 +30,6 @@
 #include "mimas_cmd_defs.h"
 #include "bm_handling.h"
 
-#define gettid syscall(SYS_gettid)
-
-
-
-
 pthread_spinlock_t  prnlock=0;
 volatile int upd_pwm = 0;
 
@@ -69,86 +64,6 @@ uint64_t timesum;
 uint64_t timesum_mimas;
 uint64_t timesum_proc;
 clock_t t1,t2, t3, p1,p2;
-
-
-void print_trace (void)
-{
-  void *array[10];
-  size_t size;
-  char **strings;
-  size_t i;
-
-  size = backtrace (array, 10);
-  strings = backtrace_symbols (array, size);
-
-  printf ("Obtained %zd stack frames.\n", size);
-
-  for (i = 0; i < size; i++)
-     printf ("%s\n", strings[i]);
-
-  free (strings);
-}
-void print_trace_gdb() {
-    char pid_buf[30];
-    sprintf(pid_buf, "%d", getpid());
-    char name_buf[512];
-    name_buf[readlink("/proc/self/exe", name_buf, 511)]=0;
-
-    int child_pid = fork();
-    if (!child_pid) {
-        dup2(2,1); // redirect output to stderr
-        fprintf(stdout,"stack trace for %s pid=%s\n",name_buf, pid_buf);
-        execlp("gdb", "gdb", "--batch", "-n", "-ex", "thread", "-ex", "bt", name_buf, pid_buf, NULL);
-        //if gdb failed to start
-        abort();
-    } else {
-        waitpid(child_pid,NULL,0);
-    }
- }
-void fault_handler(int signo, siginfo_t *info, void *extra)
-{
-	printf(" =========== Signal %d received =========== \n", signo);
-	printf("siginfo address=%x\n",info->si_addr);
-
-	ucontext_t *p=(ucontext_t *)extra;
-	int val = p->uc_mcontext.arm_pc;
-	printf("address = %x\n\nBACKTRACE:\n",val);
-	print_trace();
-	//print_trace_gdb();
-	abort();
-}
-
-void setHandler(void (*handler)(int,siginfo_t *,void *))
-{
-    printf("Setting up SIG_HAN\n");
-	struct sigaction action;
-	action.sa_flags = SA_SIGINFO;
-	action.sa_sigaction = handler;
-
-	if (sigaction(SIGFPE, &action, NULL) == -1) {
-		perror("sigfpe: sigaction");
-		_exit(1);
-	}
-	if (sigaction(SIGSEGV, &action, NULL) == -1) {
-		perror("sigsegv: sigaction");
-		_exit(1);
-	}
-	if (sigaction(SIGILL, &action, NULL) == -1) {
-		perror("sigill: sigaction");
-		_exit(1);
-	}
-	if (sigaction(SIGBUS, &action, NULL) == -1) {
-		perror("sigbus: sigaction");
-		_exit(1);
-	}
-	//SIGALRM
-	if (sigaction(SIGALRM, &action, NULL) == -1) {
-		perror("sigbus: sigaction");
-		_exit(1);
-	}
-    printf("Done setting up SIG_HAN\n");
-}
-
 
 void prnDev(int idx)
 {
@@ -194,7 +109,7 @@ void prnDev(int idx)
     }
 }
 
-void make_a_dev()
+void make_a_dev(void)
 {
     int res, i;
     pwm_cfg_t cfg;
@@ -222,18 +137,19 @@ void make_a_dev()
     res = build_dev_pwm(&pdev, &cfg);
 
     ws_pix_vdev_t   vd;
-    vd.pixel_count = 1500;
+    vd.pixel_count = 6000;//1500;
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    vd.pixel_count = 4500;
+    /*vd.pixel_count = 4500;
     vd.pix_per_uni = 150;
-    vd.com.start_address = 80;
+    vd.com.start_address = 27;
     res =build_dev_ws(&vd);
-
+*/
     prnDev(res);
 }
+
 
 void InitOuts(void)
 {
@@ -262,44 +178,47 @@ void InitOuts(void)
     }
 }
 
-
 int sendOutToMimas(int oSel)
 {
     return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen));
 }
 
-void* consumer(void* d)
+void* consumer(void* dat)
 {
+    //setHandler(fault_handler);
+    prnFinf(log_con,"Consumer Starting (tid:%d)...\n", gettid);
     uint8_t             check_unis;
-    int                 devCnt, devIdx[MAX_VDEV_CNT];
-    uint32_t idx, i,    attention;
+    int                 devIdx[MAX_VDEV_CNT], devCnt, i, rc, ticks_to_sleep;
+    uint32_t            popcnt=0;
     peer_pack_t         ppack;
-    peer_pack_t *pkt =  &ppack;
+    peer_pack_t*         pkt =  &ppack;
     uint64_t            peer_id;
+    task_cfg_t*         tcfg = (task_cfg_t*)dat;
+    app_node_t*         artn = (app_node_t*)tcfg->iniData;
 
-    app_node_t *artn = (app_node_t*)d;
-    post_box_t* pb = artn->artPB;
-    node_t *me = artn->artnode;
-    sm_t* sm = &me->sm;
-    node_branch_t branches[5];
-    node_branch_t* pwmBr = &branches[0];
-    node_branch_t* pixBr = &branches[1];
-    node_branch_t* localBr =&branches[2];
-    node_branch_t* dropBr = &branches[3];
-    node_branch_t* miscBr = &branches[4];
-    int  rc;
-    uint16_t start_bm;
-    fl_t cn, cnn;
-    art_net_pack_t      *ap;
-    peer_pack_t         *pp;
-    int mark, lowMark;
-    lowMark = RQ_DEPTH;
-    art_resp_e  art_res;
-    gen_addres_u    raw_addr;
-    uint8_t runi, oSel, sUni; //relative universe
-    int which = PRIO_PROCESS;
-    int ret;
-    cpu_set_t cpuset;
+    post_box_t*         pb = artn->artPB;
+    node_t*             me = artn->artnode;
+
+    node_branch_t       branches[5];
+    node_branch_t*      pwmBr = &branches[0];
+    node_branch_t*      pixBr = &branches[1];
+    node_branch_t*      localBr =&branches[2];
+    node_branch_t*      dropBr = &branches[3];
+    node_branch_t*      miscBr = &branches[4];
+    uint16_t            start_bm;
+    fl_t                cn, cnn, nodes;
+    post_box_t*         pb_owner;
+    sockdat_ntfy_t*     msg;
+    art_net_pack_t*     ap;
+    peer_pack_t*        pp;
+    art_resp_e          art_res;
+    gen_addres_u        raw_addr;
+
+    mimas_out_dev_t*    cdev;
+    trace_msg_t*        trms[5];
+    struct timespec     ts_now;
+    long                elapsed;
+
     timeloop=0;
     timesum =0;
     timesum_mimas=0;
@@ -310,53 +229,25 @@ void* consumer(void* d)
     trm[cons_pack_full].ev          = cons_pack_full;
     trm[cons_mimas_refreshed].ev    = cons_mimas_refreshed;
     trm[cons_mimas_start].ev        = cons_mimas_start;
-    uint32_t popcnt=0;
-    mimas_out_dev_t *cdev;
-    trace_msg_t *trms[5];
+
     trms[0]=&trm[0];
     trms[1]=&trm[1];
     trms[2]=&trm[2];
     trms[3]=&trm[3];
     trms[4]=&trm[4];
- #define handle_error_en(en, msg) \
-               do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
 
-   /* Check the actual affinity mask assigned to the thread */
-
-   ret = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-   if (ret != 0)
-       handle_error_en(ret, "pthread_getaffinity_np");
-
-   printf("Get returned by pthread_getaffinity_np() contained:\n");
-   int j =1;
-   for (i = 0; i < 8; i++)
-   {
-       if((cpuset.__bits[0] & j) !=0)
-           printf("CPU %d, ", i);
-        j<<=1;
-    }
-
-    printf("CONSUMER TID = %u\n", (uint32_t)gettid);
-    ret = setpriority(which, gettid,  CONS_PRIO_NICE );
-    printf("Consumer set_nice to (%i) returns %d\n",CONS_PRIO_NICE, ret);
-    struct timespec ts_now;
-    long elapsed;
-    int cause = 0;
+    threadConfig(tcfg, log_con);
     clock_getres(CLOCK_PROCESS_CPUTIME_ID, &timers[1]);
-    printf("ClockRes = %lusec, %u nsec\n", timers[1].tv_sec, timers[1].tv_nsec);
+    prnDbg(log_con,"ClockRes = %lusec, %u nsec\n", timers[1].tv_sec, timers[1].tv_nsec);
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &timers[idle_e]);
     t1 = clock();
-    fl_t nodes;
-    post_box_t* pb_owner;
-    sockdat_ntfy_t* msg;
-    int ticks_to_sleep;
+
     check_unis = 0;
     ticks_to_sleep = 6;
     clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
     while(1)
     {
         cdev = NULL;
-
         memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
         do
         {
@@ -375,9 +266,13 @@ void* consumer(void* d)
                         check_unis=0;
                         ticks_to_sleep++;
                         trms[0]->ts = ts_now;
-                        prnFinf(log_con, "Elapsed ovf : %ld nsec\n", elapsed );
+                        prnFinf(log_con, "Elapsed ovf : %ld nsec\npktPb lowMark = %d\n", elapsed, pkt_pb->ll.pile.low_mark );
+                         pkt_pb->ll.pile.low_mark=pkt_pb->ll.pile.maxCount+1;
                     }
+                    //usleep(5);
+
                 }
+                //pthread_yield();
             }
         }while(pkt == NULL);
         clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
@@ -470,7 +365,7 @@ void* consumer(void* d)
                         if(taken == bm_free_e)
                         {
                             prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
-                            prnFinf(log_con,"Receiving %u universes\n", devList.glo_uni_map->reserved);
+                            prnFinf(log_con,"Added uni %d to global,Receiving %u universes\n",raw_addr.addr, devList.glo_uni_map->reserved);
                         }
                     }
 
@@ -563,14 +458,14 @@ void* consumer(void* d)
         {
             dropBr->lst->nxt  = NULL;
             prnLLdetail(dropBr->hd, "DROPS", "Drops");
-            j = putNodes(dropBr->hd->pb, dropBr->hd);
-            prnDbg(log_con,"Dropped %d unamapped Pkts\n",j);
+            i = putNodes(dropBr->hd->pb, dropBr->hd);
+            prnDbg(log_con,"Dropped %d unamapped Pkts\n",i);
         }
         if(localBr->hd)
         {
             localBr->lst->nxt = NULL;
             make_artnet_resp(localBr->hd->item.pl.msg);
-            j = putNodes(localBr->hd->pb, localBr->hd);
+            i = putNodes(localBr->hd->pb, localBr->hd);
         }
 
     }
@@ -581,39 +476,21 @@ void *pix_handler(void* dat)
 {
     post_box_t*         pb = pix_pb;
     peer_pack_t*        pkt;
-    #define handle_error_en(en, msg) \
-               do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+    task_cfg_t* tcfg = (task_cfg_t*)dat;
+    threadConfig(tcfg, log_pix);
+    prnFinf(log_pix,"PixHandler Started (tid:%d)...\n", gettid);
 
-   /* Check the actual affinity mask assigned to the thread */
-   cpu_set_t cpuset;
-   int ret;
-   ret = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-   if (ret != 0)
-       handle_error_en(ret, "pthread_getaffinity_np");
+    int*                devs = NULL;
+    int                 devCnt, i, j;
+    mimas_out_dev_t**   vDevs;
+    mimas_out_dev_t*    cdev;
+    vdev_sm_t*          sm;
+    pix_dev_pt          pixDev;
+    int                 hwId=-1;
+    uint16_t            mimas_start_bm=0;
+    addressing_t        absAddr, relAddr;
+    struct timespec     tnow,before, mimas_ref;
 
-   int j =1;
-   int i;
-   for (i = 0; i < 8; i++)
-   {
-       if((cpuset.__bits[0] & j) !=0)
-           printf("CPU %d, ", i);
-        j<<=1;
-    }
-
-    prnFinf(log_pix, "PIXHAN TID = %u\n", (uint32_t)gettid);
-    ret = setpriority(PRIO_PROCESS, gettid,  PIXHAN_PRIO );
-    prnFinf(log_pix, "PIXHAN set_nice to (%i) returns %d\n",PIXHAN_PRIO, ret);
-
-    prnFinf(log_pix,"PixHandler started...\n");
-    int* devs = NULL;
-    int devCnt;
-    mimas_out_dev_t** vDevs;
-    mimas_out_dev_t* cdev;
-    vdev_sm_t*  sm;
-    pix_dev_pt      pixDev;
-    int hwId=-1;
-    uint16_t    mimas_start_bm=0;
-    addressing_t    absAddr, relAddr;
     do
     {
         devCnt = findVDevsOfType(ws_pix_dev,NULL);
@@ -632,16 +509,15 @@ void *pix_handler(void* dat)
             hwId=pixDev->out_start_id;
             outs[hwId].fullMap = pixDev->com.vdsm.expected_full_map;
         }
-        //pixDev->com = cdev->dev_com;
-        //sm = &cdev->dev_com.vdsm;
     }
-
+    clock_gettime(CLOCK_REALTIME, &tnow);
+    before = tnow;
     while(1)
     {
         do
         {
             pkt = getMsg(&pb->rq);
-            usleep(2ul);
+            //usleep(2ul);
         }while(pkt == NULL);
         switch(pkt->genmtyp)
         {
@@ -652,26 +528,32 @@ void *pix_handler(void* dat)
                 sock_data_msg_t* dt;
                 art_net_pack_t* ap;
                 post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
-                //msgRead(&pb->rq);
                 prnDbg(log_pix,"msg_typ_socket_ntfy msg received\n");
                 while(cn)
                 {
                     dt = cn->item.pl.msg;
                     ap =  &dt->pl.art;
                     absAddr = ap->ArtDmxOut.a_net.raw_addr ;
-                    i = findVDevAtAddr(absAddr);
+                    i = cn->item.pl.vDevId;
+                    if((i<0)||(i>= MAX_VDEV_CNT))
+                    {
+                            prnErr(log_pix, "Invalid pixDev at idx %d\n",i);
+                            putNode(cn->pb,cn, &cn);
+                            continue;
+                    }/*
                     if(i<0)
                     {
                         prnErr(log_pix,"No vDev found for addr %u\n",absAddr);
                         putNode(cn->pb,cn, &cn);
                         continue;
-                    }
+                    }*/
                     cdev = &devList.devs[i];
                     sm = &cdev->dev_com.vdsm;
                     hwId = -1;
-                    for(i=0;i<cdev->sub_dev_cnt;i++)
+                    for(j=0;j<cdev->sub_dev_cnt;j++)
                     {
-                        pixDev = cdev->pix_devs[i];
+                        pixDev = cdev->pix_devs[j];
+
                         relAddr = absAddr - pixDev->com.start_address;
                         if(pixDev->com.end_address >= absAddr)
                         {
@@ -681,56 +563,56 @@ void *pix_handler(void* dat)
                             {
                                 prnErr(log_pix,"Duplicate Universe %u\n", absAddr);
                             }
-                            pixDev->com.vdsm.curr_map|= BIT64(relAddr);
-                            sm->curr_map|= BIT64(relAddr) << (i * UNI_PER_OUT);
-                            outs[hwId].dlen+=pixDev->pix_per_uni * (int)pixDev->colCnt;
+                            else
+                            {
+                                pixDev->com.vdsm.curr_map|= BIT64(relAddr);
+                                sm->curr_map|= BIT64(relAddr) << (j * UNI_PER_OUT);
+                                outs[hwId].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
+                            }
+                            mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
                             break;
                         }
                     }
 
-                    mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
-                    prnDbg(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
+
+                    prnInf(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
                     putNode(cn->pb,cn, &cn);
                     if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
                     {
                         i = sendOutToMimas(hwId);
-                        prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);
-                        mimas_start_bm|=BIT8(hwId);
+                        if(i) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, i);}
+                        else  {prnFinf(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
+                        mimas_start_bm|=BIT16(hwId);
                     }
                     if(sm->curr_map == sm->expected_full_map)
                     {
+                        mimas_start_bm = 0;
+                        sm->curr_map = 0ull;
+                        pixDev = cdev->pix_devs[0];
+                        for(j=0;j<cdev->sub_dev_cnt;j++)
+                        {
+                            mimas_start_bm|=BIT16(pixDev->out_start_id);
+                            pixDev->com.vdsm.curr_map = 0;
+                            outs[pixDev->out_start_id].fillMap = 0;
+                            outs[pixDev->out_start_id].dlen = 0;
+                            pixDev++;
+
+                        }
                         prnDbg(log_pix, "Full pix frame received\n");
+                        before = tnow;
+                        clock_gettime(CLOCK_REALTIME, &mimas_ref);
                         i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                        clock_gettime(CLOCK_REALTIME, &tnow);
                         if(i!=0)
                         {
                             prnErr(log_pix,"Sent refresh to mimas bm:%X, rc = %d\n", mimas_start_bm, i);
                         }
                         else
                         {
-                            prnDbg(log_pix,"Sent refresh to mimas bm:%X\n", mimas_start_bm);
+                            prnFinf(log_pix,"Sent refresh to mimas bm:%X , tdiff %ld mSec ,mimas %ld uSec\n", mimas_start_bm,  nsec_diff(&tnow, &before)/1000000l,  nsec_diff(&tnow, &mimas_ref)/1000l);
                         }
-                        i=0;
-                        while(mimas_start_bm)
-                        {
-                            if(mimas_start_bm & 1)
-                            {
-                               // outs[i].fillMap = 0;
-                               // outs[i].dlen = 0;
-                            }
-                            i++;
-                            mimas_start_bm>>=1;
-                        }
-                        sm->curr_map = 0ull;
-                        for(i=0;i<cdev->sub_dev_cnt;i++)
-                        {
-                            pixDev = cdev->pix_devs[i];
-                            pixDev->com.vdsm.curr_map = 0;
-                            hwId = pixDev->out_start_id;
-                            outs[hwId].fillMap = 0;
-                            outs[hwId].dlen = 0;
-                        }
+                        tnow = mimas_ref;
                     }
-
                 }
                 break;
             }
@@ -758,8 +640,9 @@ void *pix_handler(void* dat)
     if(devs)free(devs);
 }
 
-void* producer(void* d)
+void* producer(void* dat)
 {
+    prnFinf(log_prod,"Produce Starting (tid:%d)...\n", gettid);
     uint32_t            i, msg_need;
     int32_t             msgcnt;
     sock_data_msg_t     *packs[MMLEN_MMAX];
@@ -767,13 +650,15 @@ void* producer(void* d)
     struct mmsghdr      msgs[MMLEN_MMAX];
     struct iovec        iovecs[MMLEN_MMAX];
     sock_data_msg_t     *pktPtr;
-    app_node_t* artn = (app_node_t*)d;
+    task_cfg_t* tcfg = (task_cfg_t*)dat;
+    threadConfig(tcfg, log_pix);
+    app_node_t* artn = (app_node_t*)tcfg->iniData;
     node_t*             n = artn->artnode;
     int mysock =        n->sockfd;
     mimas_state_t       mSt;
     int                 addr_len, ret;
     pid_t               pid;
-    int                 batch= 2;
+    int                 batch;
     sm_state_e          sm_state_cache;
     fl_t                nodes;
     fl_t                cn;
@@ -791,32 +676,6 @@ void* producer(void* d)
     trace_msg_t trm;
     trm.ev = prod_rx_msgs;
     trm.seq = 0;
-    #define MMLEN batch
-   // i=socket_set_blocking(n->sockfd, 0);
- #define handle_error_en(en, msg) \
-               do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
-
-    ret = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
-           if (ret != 0)
-               handle_error_en(ret, "Producer pthread_getaffinity_np");
-    cpuset.__bits[0] = 0xC;
-    ret = pthread_setaffinity_np(thread,sizeof(cpu_set_t), &cpuset);
-
-    if (ret != 0)
-               handle_error_en(ret, "Producer pthread_setaffinity_np");
-
-    ret = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
-
-    if (ret != 0)
-               handle_error_en(ret, "Producer pthread_getaffinity_np2");
-    else
-    {
-        prnFinf(log_any,"Affinity on producer is set to 0x%0lx\n", cpuset.__bits[0]);
-    }
-
-    pid_t tid = gettid;
-    ret = setpriority(PRIO_PROCESS, tid, (PROD_PRIO_NICE ) );
-    prnFinf(log_any,"Producer set_nice to (%i) returns %d\n",PROD_PRIO_NICE, ret);
 
     time_t     now;
     struct tm  ts;
@@ -844,20 +703,21 @@ void* producer(void* d)
         {
             setSockTimout(n->sockfd,500);
         }
+        msg_need = batch;
+        batch = (MAX(2,RCVED_UNIS(devList)));
+        if(batch!=msg_need)prnFinf(log_prod,"Batch changed %d -> %d\n", msg_need, batch);
+        while(batch > MMLEN_MMAX) batch>>=1;
         msg_need = 0;
-        MMLEN = (MAX(2,RCVED_UNIS(devList)))/2;
-        while(MMLEN > MMLEN_MMAX)MMLEN>>1;
-        prnInf(log_prod,"MMLEN = %d\n", MMLEN);
-        if(nodes_avail < MMLEN)
+        //prnInf(log_prod,"batch = %d\n", batch);
+        if(nodes_avail < batch)
         {
             do{
-                msg_need = msgRezerveMultiNB(pkt_pb,&con_node, MMLEN - nodes_avail);
+                msg_need = msgRezerveMultiNB(pkt_pb,&con_node, batch - nodes_avail);
                 msg_need += nodes_avail;
                 if(msg_need == 0)
                 {
-                    usleep(2000000ul);
-                    prnErr(log_prod,"No nodes available!!\n");
-
+                   prnErr(log_prod,"No nodes available!!\n");
+                   usleep(500000ul);
                 }
             }while(msg_need == 0);
             if(nodes)
@@ -897,12 +757,12 @@ void* producer(void* d)
             msg_need = i;
         }
 
+
         timeout.tv_sec = 0l;
         timeout.tv_nsec = (2ul * MILIS);
-        sm_state_cache = n->sm.state;
         msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
         time(&trm.ts2);
-        prnInf(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
+        prnFinf(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
 
         if((artn->artnode->all % 1000000) == 0)
         {
@@ -970,25 +830,15 @@ int initMessaging(void)
 
 }
 
-void pmwTest();
+void pmwHan(void*);
+
 
 int main(void)
 {
     int res;
-    setHandler(fault_handler);
-    initLogLevels(DEF_LOG_LVL);
-    //setLogLevel(log_pix,log_dbg);
-    prnInf(log_any,"BCM lib version = %u\n", bcm2835_version());
-  //  bcm2835_set_debug(1);
-    int rc = bcm2835_init();
-    int i;
-    //testLists();
-    if(rc!=1)
-    {
-        prnErr(log_any,"Error %d init bcm2835\n", rc);
-        return(-1);
-    }
-
+    sys_init();
+    prnFinf(log_any,"PixLed Starting (tid:%d)...\n", gettid);
+    setLogLevel(log_ll,log_info);
     initMessaging();
     anetp->artPB = sock_pb;
     /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/
@@ -996,58 +846,29 @@ int main(void)
     /*ascnp->artnode = createNode(protosACN);*/
     init_mimas_vdevs();
     InitOuts();
-    initSPI();
-
-    do
-    {
-        res = initMimas();
-        if(res!=0) sleep(1);
-    }while(res!=0);
+    initMimasIntf(NULL);
     mimas_all_black(&outs);
     usleep(100000);
-    pthread_t pwm_tst_th;
-    pthread_create(&pwm_tst_th,NULL,pmwTest,NULL);
-    prnFinf(log_pwm,"Started PWM Test thread\n");
-    rc = pthread_setname_np(pwm_tst_th, "PixLedPwmHan\0");
-    if(rc)
-    {
-        perror("Producer1 thread rename failed");
-    }
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);
     art_set_node(anetp->artnode);
     anetp->artnode->intLimit = 50;
     SmReset(anetp->artnode,eResetInit);
 
-    pthread_create(&anetp->artnode->con_tid, NULL, consumer,(void*)anetp);
-    rc = pthread_setname_np(anetp->artnode->con_tid, "PixLedCons\0");
-    if(rc)
-    {
-        perror("Consumer1 thread rename failed");
-    }
+    tasks[4].iniData = (void*)ev_pb;
+    pthread_create(&tasks[4].thread,NULL,one_sec, (void*)&tasks[4]);
 
-    pthread_create(&anetp->artnode->prod_tid, NULL, producer,(void*)anetp);
-    rc = pthread_setname_np(anetp->artnode->prod_tid, "PixLedProd\0");
-    if(rc)
-    {
-        perror("Producer1 thread rename failed");
-    }
-    pthread_t time_one_sec;
-    pthread_create(&time_one_sec,NULL,one_sec,(void*)ev_pb);
-    rc = pthread_setname_np(time_one_sec, "PixLedStats\0");
-    if(rc)
-    {
-        perror("Consumer1 thread rename failed");
-    }
+    pthread_create(&tasks[3].thread,NULL,pmwHan, (void*)&tasks[3]);
 
-    pthread_t pix_handler_th;
-    pthread_create(&pix_handler_th,NULL,pix_handler,(void*)anetp);
-    rc = pthread_setname_np(pix_handler_th, "PixHandler\0");
-    if(rc)
-    {
-        perror("Consumer1 thread rename failed");
-    }
+    tasks[2].iniData = (void*)anetp;
+    pthread_create(&tasks[2].thread,NULL,pix_handler, (void*)&tasks[2]);
 
+    tasks[1].iniData = (void*)anetp;
+    pthread_create(&tasks[1].thread,NULL,consumer, (void*)&tasks[1]);
+
+    tasks[0].iniData = (void*)anetp;
+    pthread_create(&tasks[0].thread,NULL,producer, (void*)&tasks[0]);
+    print_trace();
     prnFinf(log_any,"Starting Web Server...\n");
     while(1)
     {
@@ -1058,9 +879,12 @@ int main(void)
     return(0);
 }
 
-void pmwTest()
+void pmwHan(void* dat)
 {
-    prnFinf(log_pwm,"PWM Handler Starting...\n");
+    task_cfg_t tcfg = *(task_cfg_t*)dat;
+    tcfg.tid = gettid;
+    threadConfig(&tcfg, log_pwm);
+    prnFinf(log_pwm,"PWM Handler Starting (tid:%d)...\n", gettid);
     pwm_group_data_t pwm_d[MIMAS_PWM_GROUP_CNT];
     memset((void*)pwm_d, 0, sizeof(pwm_group_data_t)* MIMAS_PWM_GROUP_CNT);
     post_box_t* pb = pwm_pb;
@@ -1269,24 +1093,32 @@ void pmwTest()
                 {
                     if(pwm_d[k].needUpdate)
                     {
-                        j = mimas_store_pwm_val( \
-                                        BIT8(k), \
-                                        pwm_d[k].startUpdIdx, \
-                                        &pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
-                                        pwm_d[k].UpdChCount);
+                        do
+                        {
+                            j = mimas_store_pwm_val( \
+                                            BIT8(k), \
+                                            pwm_d[k].startUpdIdx, \
+                                            &pwm_d[k].ch_pers[pwm_d[k].startUpdIdx], \
+                                            pwm_d[k].UpdChCount);
+                            if(j)
+                            {
+                                prnErr(log_pwm,"mimas_send_err % d in %d\n",j, __LINE__);
+                                usleep(10000);
+                            }
+                        }while(j);
 
-                        j = mimas_store_pwm_chCntrol(BIT8(k), \
-                                        pwm_d[k].startUpdIdx, \
-                                        &pwm_d[k].ch_ctrls[pwm_d[k].startUpdIdx], \
-                                        pwm_d[k].UpdChCount);
-                        if(j)
+                        do
                         {
-                            printf("mimas_send_err % d in %d\n",j, __LINE__);
-                        }
-                        else
-                        {
-                            //printf("sending PWM data to mimas vDev %d\n",j);
-                        }
+                            j = mimas_store_pwm_chCntrol(BIT8(k), \
+                                            pwm_d[k].startUpdIdx, \
+                                            &pwm_d[k].ch_ctrls[pwm_d[k].startUpdIdx], \
+                                            pwm_d[k].UpdChCount);
+                            if(j)
+                            {
+                                prnErr(log_pwm,"mimas_send_err % d in %d\n",j, __LINE__);
+                            }
+                        }while(j);
+
                         pwm_d[k].UpdChCount = 0;
                         pwm_d[k].needUpdate = 0;
                     }

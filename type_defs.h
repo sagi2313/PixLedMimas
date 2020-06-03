@@ -48,12 +48,7 @@
 #define BIT8(B)  ( (uint8_t)( ((uint32_t)1U)<<((uint32_t)(B)) )  & 0xFF)
 #endif
 
-#define MMLEN_MMAX   40
 
-#define MBYTES ( 1024ul * 1024ul)
-
-#define MILIS   (1000000l)
-#define CONS_TOV (500l * MILIS)
 
 typedef enum
 {

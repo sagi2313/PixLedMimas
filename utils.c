@@ -1,14 +1,36 @@
 //create a udp server socket. return ESP_OK:success ESP_FAIL:error
 #include "utils.h"
 #include "mimas_cfg.h"
+#include <sys/sysinfo.h>
+
+void setHandler(void (*handler)(int,siginfo_t *,void *));
+void fault_handler(int signo, siginfo_t *info, void *extra);
+void print_trace(void);
+void print_trace_gdb();
+
+extern app_node_t* anetp;
+node_t* Node = NULL;
+
+int cpu_online=0;
 
 log_lvl_e LogLvl[(int)log_src_max];
 uint32_t  LogMask = BIT32(log_src_max) -1u;
 const char *ll_str[] = {"DBG  ","INFO " ,"fINF","ERROR"};
 const char *ls_str[(int)log_src_max] =
 {
-    "GEN ", "PROD", "CONS", "TRAC", "EVNT", "AHAN", "PIXH", "PWMH", "DMXH", "LL  ", "GeN "
+    "GEN ", "PROD", "CONS", "TRAC", "EVNT", "AHAN", "PIXH", "PWMH", "DMXH", "LL  ", "MIMA", "GeN "
 };
+
+task_cfg_t tasks[MAX_TASK_CNT] =
+{
+    {"PixlProd", 0, 0, PROD_PRIO, PROD_AFFINITY },
+    {"PixlCons", 0, 0, CONS_PRIO, CONS_AFFINITY },
+    {"PixlPixH", 0, 0, PIXH_PRIO, PIXH_AFFINITY },
+    {"PixlPwmH", 0, 0, PWMH_PRIO, PWMH_AFFINITY },
+    {"PixlStat", 0, 0, STAT_PRIO, STAT_AFFINITY },
+    {"PixlMimW", 0, 0, MIMS_PRIO, MIMS_AFFINITY }
+};
+
 
 void setLogLevel(log_src_e src, log_lvl_e lvl)
 {
@@ -17,7 +39,7 @@ void setLogLevel(log_src_e src, log_lvl_e lvl)
 
 log_lvl_e getLogLevel(log_src_e src)
 {
-    return(LogLvl[(int)src-1] );
+    return(LogLvl[(int)src] );
 }
 
 void initLogLevels(log_lvl_e lvl)
@@ -25,6 +47,25 @@ void initLogLevels(log_lvl_e lvl)
     for(int i=0;i<log_src_max;i++)
     {
         LogLvl[i] = lvl;
+    }
+}
+
+int sys_init(void)
+{
+    int res, i;
+    initLogLevels(DEF_LOG_LVL);
+    prnFinf(log_any,"BCM lib version = %u\n", bcm2835_version());
+    cpu_online = get_nprocs();
+    res = bcm2835_init();
+    if(res!=1)
+    {
+        prnErr(log_any,"Error %d init bcm2835\n", res);
+        return(-1);
+    }
+    setHandler(fault_handler);
+    for(i=0;i<MAX_TASK_CNT;i++)
+    {
+        tasks[i].affinity &= (BIT8(cpu_online)-1u);
     }
 }
 
@@ -37,8 +78,6 @@ uint32_t next_pow2_32(uint32_t x)
     return x < 2 ? x : 1<<(32-__builtin_clz(x-1));
 }
 
-extern app_node_t* anetp;
-node_t* Node = NULL;
 static int get_socket_error_code(int socket)
 {
     int result;
@@ -833,7 +872,8 @@ void mimas_all_black(out_def_t* outs)
             mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
         }
     }
-    mimas_refresh_start_stream(MIMAS_STREAM_BM,0);
+    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0);
+    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
 }
 
 inline mimas_state_t mimas_get_state(void)
@@ -893,6 +933,24 @@ int initMimas(void)
     return(-1);
 }
 
+static void* mimasWorker(void* d)
+{
+
+}
+
+int initMimasIntf(void* d)
+{
+    int res = initSPI();
+    if(res!=0)return(res);
+    do
+    {
+        res = initMimas();
+        if(res!=0) usleep(100000); // 100milisec
+    }while(res!=0);
+
+    return(0);
+}
+
 int socketStart(node_t* n, uint16_t portno)
 {
     int rc;
@@ -950,9 +1008,11 @@ int tmr_create(uint32_t *timerid )
 
 //#define ALL_EVENTS
 //#define EVENT_DIFFS
-void* one_sec(void* d)
+void* one_sec(void* dat)
 {
-    post_box_t*     pb = (post_box_t*)d;
+    task_cfg_t *tcfg = (task_cfg_t*)dat;
+    post_box_t*     pb = (post_box_t*)tcfg->iniData;
+    threadConfig(tcfg, log_evnt);
     rq_head_t*      evrq_head = &pb->rq;
     trace_msg_t*    evrq = evrq_head->evq;
     char       tsbuf[8192];
@@ -972,8 +1032,11 @@ void* one_sec(void* d)
     rx_p=0;
     proc_p = 0;
     int print=0;
+    uint64_t    tries,blocks,hits;
     while(1)
     {
+        /*getSpinStats(&tries,&blocks,&hits);
+        prnFinf(log_trace,"Hits:%llu, Tries:%llu, Blocks:%llu\n", hits,tries,blocks);*/
         clock_gettime(CLOCK_REALTIME, &sleep_for[0]);
         res = get_taces(evrq_head, &idxs[0], 64);
         if(res>0)
@@ -1090,3 +1153,161 @@ inline long nsec_diff(struct timespec *now, struct timespec *be4)
     return( ((long)(diff.tv_sec)*1000000000l) + diff.tv_nsec );
 }
 
+void querySys(void)
+{
+    volatile long res;
+    res = sysconf(_SC_PHYS_PAGES); prnFinf(log_any,"_SC_PHYS_PAGES : %d\n", res);
+    res = sysconf(_SC_AVPHYS_PAGES); prnFinf(log_any,"_SC_AVPHYS_PAGES : %d\n", res);
+    res = sysconf(_SC_NPROCESSORS_CONF); prnFinf(log_any,"_SC_NPROCESSORS_CONF : %d\n", res);
+    res = sysconf(_SC_NPROCESSORS_ONLN); prnFinf(log_any,"_SC_NPROCESSORS_ONLN : %d\n", res);
+    res = sysconf(_SC_PAGESIZE); prnFinf(log_any,"_SC_PAGESIZE : %d\n", res);
+
+    res = (long)get_nprocs();prnFinf(log_any,"get_nprocs : %d\n", res);
+    res = (long)get_nprocs_conf();prnFinf(log_any,"get_nprocs_conf : %d\n", res);
+}
+
+void threadConfig(task_cfg_t* tcfg, log_src_e lsrc)
+{
+    int ret;
+    cpu_set_t cpuset;
+
+    ret = pthread_setname_np(tcfg->thread, tcfg->name);
+    if(ret)
+    {
+        prnErr(lsrc,"%s: thread rename failed, ret %d\n",tcfg->name, ret );
+    }
+
+    ret = pthread_getaffinity_np(tcfg->thread , sizeof(cpu_set_t), &cpuset);
+    if (ret != 0)
+    {
+        prnErr(lsrc,"Failed to get affinity for %s, ret %d\n", tcfg->name, ret);
+    }
+    if( cpuset.__bits[0] != tcfg->affinity )
+    {
+        cpuset.__bits[0] = tcfg->affinity;
+        //sched_setaffinity()
+        ret = pthread_setaffinity_np(tcfg->thread, sizeof(cpu_set_t), &cpuset);
+
+        if(ret != 0)
+        {
+            prnErr(lsrc,"Failed to set affinity for %s, ret %d\n", tcfg->name, ret);
+        }
+        ret = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+        if (ret != 0)
+        {
+            prnErr(lsrc,"Failed to get affinity for %s, ret %d\n", tcfg->name, ret);
+        }
+        else
+        {
+            if(tcfg->affinity == cpuset.__bits[0])
+            {
+                prnFinf(lsrc,"%s: Affinity is set to 0x%0lx\n", tcfg->name, cpuset.__bits[0]);
+            }
+            else
+            {
+                prnErr(lsrc,"%s: Affinity missmatch: requested: 0x%X, has 0x%X\n", tcfg->name, tcfg->affinity ,cpuset.__bits[0]);
+            }
+        }
+    }
+   /* struct sched_param sp;
+    ret = sched_getparam(tcfg->tid, &sp);
+    prnFinf(log_any,"Min nice:%d, Max nice:%d\n", sched_get_priority_min(SCHED_OTHER), sched_get_priority_max(SCHED_OTHER));
+    ret = pthread_setschedprio( tcfg->thread, tcfg->nice );*/
+    ret = setpriority(PRIO_PROCESS, tcfg->tid, tcfg->nice);
+    prnFinf(lsrc,"%s set_nice to (%i) returns %d, errno %d\n",tcfg->name,tcfg->nice, ret, errno);
+
+}
+
+
+void print_trace(void)
+{
+  void *array[10];
+  size_t size;
+  char **strings;
+  size_t i;
+
+  size = backtrace(array, 10);
+  strings = backtrace_symbols(array, size);
+
+  printf ("Obtained %zd stack frames, executing thread %d.\n", size, gettid);
+
+  for (i = 0; i < size; i++)
+     printf ("%s\n", strings[i]);
+
+  free (strings);
+}
+
+void print_trace_gdb()
+{
+    char pid_buf[256] ={0};
+    sprintf(pid_buf, "%d", getpid());
+    char name_buf[4096];
+    name_buf[readlink("/proc/self/exe", name_buf, 4095)]=0;
+
+    int child_pid = fork();
+    if (!child_pid) {
+        dup2(2,1); // redirect output to stderr
+       // printf("\n(1)stack trace for %s pid=%s\n",name_buf, pid_buf);
+        //execlp("gdb", "gdb", "--batch", "-n", "-ex", "thread", "-ex", "bt fu", name_buf, pid_buf, NULL);
+
+        //printf("\n(2)stack trace for %s pid=%s\n",name_buf, pid_buf);
+       // execlp("gdb", "gdb", "--batch", "-n",  "-ex", "bt fu", name_buf, pid_buf, NULL);
+
+        printf("\n(3)stack trace for %s pid=%s\n",name_buf, pid_buf);
+        execlp("gdb", "gdb", "--batch","-ex", "bt fu", name_buf, pid_buf, NULL);
+        //if gdb failed to start
+        abort();
+    } else {
+        waitpid(child_pid,NULL,0);
+        printf("Done backtreace=======================\n");
+    }
+ }
+void fault_handler(int signo, siginfo_t *info, void *extra)
+{
+
+	printf(" =========== Signal %d received =========== \n", signo);
+	printf("siginfo address=%x\n",info->si_addr);
+
+	ucontext_t *p=(ucontext_t *)extra;
+	int val = p->uc_mcontext.arm_pc;
+	printf("address = %x\n\nBACKTRACE:\n",val);
+	printf("\n=====================================================\n");
+	print_trace();
+	printf("\n=====================================================\n");
+	print_trace_gdb();
+	printf("\n=====================================================\n");
+	abort();
+}
+
+void setHandler(void (*handler)(int,siginfo_t *,void *))
+{
+    printf("Setting up SIG_HAN\n");
+	struct sigaction action;
+	memset(&action, 0, sizeof(struct sigaction));
+	action.sa_flags = SA_SIGINFO;
+	action.sa_sigaction = handler;
+
+	if (sigaction(SIGFPE, &action, NULL) == -1) {
+		perror("sigfpe: sigaction");
+		_exit(1);
+	}
+	if (sigaction(SIGSEGV, &action, NULL) == -1) {
+		perror("sigsegv: sigaction");
+		_exit(1);
+	}
+	if (sigaction(SIGILL, &action, NULL) == -1) {
+		perror("sigill: sigaction");
+		_exit(1);
+	}
+	if (sigaction(SIGBUS, &action, NULL) == -1) {
+		perror("sigbus: sigaction");
+		_exit(1);
+	}
+	//SIGALRM
+	if (sigaction(SIGALRM, &action, NULL) == -1) {
+		perror("sigbus: sigaction");
+		_exit(1);
+	}
+    printf("Done setting up SIG_HAN\n");
+}

@@ -6,26 +6,11 @@
 #include <unistd.h>
 #include <stdint-gcc.h>
 #include "type_defs.h"
+#include "sys_defs.h"
 //#define LL_BUFFER
 #define ERROR_IDX  ((uint32_t)(-1))
 //#define MIN( A , B ) ( ((A>B)?B:A) )
 
-#ifdef      LL_BUFFER
-#define     RQ_DEPTH    (8u * (MIMAS_STREAM_OUT_CNT * UNI_PER_OUT))
-#else
-#define     RQ_DEPTH    (512u)
-#endif
-
-#define EV_Q_DEPTH      8192
-#define PWM_Q_DEPTH     32
-#define PIX_Q_DEPTH     1024
-
-#ifndef MAX
-#define MAX(a,b)  (a<b?b:a)
-#endif
-#ifndef MIN
-#define MIN(a,b)  (a>b?b:a)
-#endif
 extern pthread_spinlock_t  prnlock;
 typedef enum
 {
@@ -54,13 +39,13 @@ typedef struct
 {
         uint32_t        itemId;
         sock_data_msg_t  *msg;
-        uint32_t        vDevId;
+        int32_t         vDevId;
 }msg_payload_t;
 
 
 typedef struct
 {
-    msg_header_t        hdr;
+    //msg_header_t        hdr;
 	msg_payload_t       pl;
 }msg_t;
 
@@ -83,6 +68,8 @@ typedef struct
 
 	uint_fast32_t 	count __attribute__ ((aligned(64)));
 	uint32_t        _p3[128 - sizeof(uint_fast32_t)];
+    uint_fast32_t 	low_mark __attribute__ ((aligned(64)));
+	uint32_t         _p4[128 - sizeof(uint_fast32_t)];
     uint32_t        Q_MSK;
     uint32_t        slot_sz;
     union
@@ -97,7 +84,9 @@ typedef struct
 typedef struct
 {
     uint_fast32_t 	    count __attribute__ ((aligned(64)));
-	uint32_t            _p3[128 - sizeof(uint_fast32_t)];
+	uint32_t            _p1[128 - sizeof(uint_fast32_t)];
+    uint_fast32_t 	    low_mark __attribute__ ((aligned(64)));
+	uint32_t            _p2[128 - sizeof(uint_fast32_t)];
 	uint32_t            maxCount;
 	fl_t			    head;
 	fl_t			    tail;
@@ -126,7 +115,6 @@ typedef struct __fList__t
     msg_t               item;
 	post_box_t*         pb;
 	fl_t		        nxt;
-
 }freeList_t;
 
 typedef struct
