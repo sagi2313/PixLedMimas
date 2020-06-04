@@ -137,16 +137,16 @@ void make_a_dev(void)
     res = build_dev_pwm(&pdev, &cfg);
 
     ws_pix_vdev_t   vd;
-    vd.pixel_count = 6000;//1500;
+    vd.pixel_count = 1500;
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    /*vd.pixel_count = 4500;
+    vd.pixel_count = 4500;
     vd.pix_per_uni = 150;
     vd.com.start_address = 27;
     res =build_dev_ws(&vd);
-*/
+
     prnDev(res);
 }
 
@@ -475,7 +475,7 @@ void* consumer(void* dat)
 void *pix_handler(void* dat)
 {
     post_box_t*         pb = pix_pb;
-    peer_pack_t*        pkt;
+    peer_pack_t*        pkt = NULL;
     task_cfg_t* tcfg = (task_cfg_t*)dat;
     threadConfig(tcfg, log_pix);
     prnFinf(log_pix,"PixHandler Started (tid:%d)...\n", gettid);
@@ -489,8 +489,12 @@ void *pix_handler(void* dat)
     int                 hwId=-1;
     uint16_t            mimas_start_bm=0;
     addressing_t        absAddr, relAddr;
-    struct timespec     tnow,before, mimas_ref;
-
+    struct timespec     tnow,before, mimas_ref, tcheck;
+    uint32_t            vDevsReadyBm = 0;
+    uint32_t            vDevsExpectedBm = 0;
+    addressing_t        DuplicateUni=0;
+    uint8_t             updMimas=0;
+    fl_t                cn = NULL;
     do
     {
         devCnt = findVDevsOfType(ws_pix_dev,NULL);
@@ -509,26 +513,84 @@ void *pix_handler(void* dat)
             hwId=pixDev->out_start_id;
             outs[hwId].fullMap = pixDev->com.vdsm.expected_full_map;
         }
+        vDevsExpectedBm|=BIT32(devs[i]);
     }
     clock_gettime(CLOCK_REALTIME, &tnow);
     before = tnow;
+    mimas_ref = tnow;
     while(1)
     {
+        if((cn == NULL) &&(pkt))   msgRead(&pb->rq);
         do
         {
-            pkt = getMsg(&pb->rq);
-            //usleep(2ul);
+            if(cn == NULL)pkt = getMsg(&pb->rq);
+            if(vDevsReadyBm == 0) continue;
+            if(vDevsExpectedBm <= vDevsReadyBm)
+            {
+                updMimas=1;
+            }
+            else
+            {
+                if(DuplicateUni!=0)
+                {
+                    updMimas=2;
+                }
+                else
+                {
+                    long  elapsed;
+                    clock_gettime(CLOCK_REALTIME, &tcheck);
+                    elapsed = nsec_diff(&tcheck,&mimas_ref);
+                    if((elapsed > 100000000l)  )
+                    {
+                        updMimas=3;
+                    }
+                }
+            }
+            if(updMimas)
+            {
+                tnow = mimas_ref;
+                i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                clock_gettime(CLOCK_REALTIME, &mimas_ref);
+                if(i!=0)
+                {
+                    prnErr(log_pix,"Sent refresh to mimas bm:%X, rc = %d\n", mimas_start_bm, i);
+                }
+                else
+                {
+                    prnDbg(log_pix,"Sent refresh to mimas bm:%X cause %u, tdiff %ld mSec uSec\n", mimas_start_bm, updMimas, nsec_diff(&mimas_ref, &tnow)/1000000l);
+                }
+                for(i=0;i<devCnt;i++)
+                {
+                    cdev = &devList.devs[devs[i]];
+                    cdev->dev_com.vdsm.curr_map = 0;
+                    for(j=0;j<cdev->sub_dev_cnt;j++)
+                    {
+                        pixDev = cdev->pix_devs[j];
+                        pixDev->com.vdsm.curr_map = 0;
+                        outs[pixDev->out_start_id].fillMap = 0;
+                        outs[pixDev->out_start_id].dlen = 0;
+                        mimas_start_bm&=~(BIT16(pixDev->out_start_id));
+                    }
+                    vDevsReadyBm&=~(BIT32(devs[i]));
+                }
+                DuplicateUni = 0;
+                updMimas=0;
+            }
+
         }while(pkt == NULL);
         switch(pkt->genmtyp)
         {
             case msg_typ_socket_ntfy:
             {
-                fl_t cn = pkt->dataNtfy.datapt;
-                fl_t cnn;
                 sock_data_msg_t* dt;
                 art_net_pack_t* ap;
-                post_box_t* rq_owner = pkt->dataNtfy.rq_owner;
-                prnDbg(log_pix,"msg_typ_socket_ntfy msg received\n");
+                post_box_t* rq_owner;
+                if(cn==NULL)
+                {
+                    cn = pkt->dataNtfy.datapt;
+                    rq_owner = pkt->dataNtfy.rq_owner;
+                    prnDbg(log_pix,"msg_typ_socket_ntfy msg received\n");
+                }
                 while(cn)
                 {
                     dt = cn->item.pl.msg;
@@ -540,13 +602,7 @@ void *pix_handler(void* dat)
                             prnErr(log_pix, "Invalid pixDev at idx %d\n",i);
                             putNode(cn->pb,cn, &cn);
                             continue;
-                    }/*
-                    if(i<0)
-                    {
-                        prnErr(log_pix,"No vDev found for addr %u\n",absAddr);
-                        putNode(cn->pb,cn, &cn);
-                        continue;
-                    }*/
+                    }
                     cdev = &devList.devs[i];
                     sm = &cdev->dev_com.vdsm;
                     hwId = -1;
@@ -558,10 +614,11 @@ void *pix_handler(void* dat)
                         if(pixDev->com.end_address >= absAddr)
                         {
                             hwId = pixDev->out_start_id;
-
                             if(pixDev->com.vdsm.curr_map & BIT64(relAddr))
                             {
-                                prnErr(log_pix,"Duplicate Universe %u\n", absAddr);
+                                prnDbg(log_pix,"CAUGHT a Duplicate Universe %u : hwID %u\n", absAddr, hwId);
+                                DuplicateUni = absAddr;
+                                break;
                             }
                             else
                             {
@@ -574,44 +631,32 @@ void *pix_handler(void* dat)
                         }
                     }
 
-
-                    prnInf(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
+                    if(DuplicateUni)break;
+                    prnDbg(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
                     putNode(cn->pb,cn, &cn);
                     if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
                     {
                         i = sendOutToMimas(hwId);
                         if(i) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, i);}
-                        else  {prnFinf(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
+                        else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
                         mimas_start_bm|=BIT16(hwId);
-                    }
-                    if(sm->curr_map == sm->expected_full_map)
-                    {
-                        mimas_start_bm = 0;
-                        sm->curr_map = 0ull;
-                        pixDev = cdev->pix_devs[0];
-                        for(j=0;j<cdev->sub_dev_cnt;j++)
-                        {
-                            mimas_start_bm|=BIT16(pixDev->out_start_id);
-                            pixDev->com.vdsm.curr_map = 0;
-                            outs[pixDev->out_start_id].fillMap = 0;
-                            outs[pixDev->out_start_id].dlen = 0;
-                            pixDev++;
 
-                        }
-                        prnDbg(log_pix, "Full pix frame received\n");
-                        before = tnow;
-                        clock_gettime(CLOCK_REALTIME, &mimas_ref);
-                        i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
-                        clock_gettime(CLOCK_REALTIME, &tnow);
-                        if(i!=0)
+                        if(sm->curr_map == sm->expected_full_map)
                         {
-                            prnErr(log_pix,"Sent refresh to mimas bm:%X, rc = %d\n", mimas_start_bm, i);
+                            prnDbg(log_pix, "Full pix frame received\n");
+                            //before = tnow;
+                            //clock_gettime(CLOCK_REALTIME, &mimas_ref);
+                            //i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                            //clock_gettime(CLOCK_REALTIME, &tnow);
+                            if(vDevsReadyBm & BIT32(cdev->dev_com.vDevIdx))
+                            {
+                                prnErr(log_pix,"vDev %d already marked ready\n",cdev->dev_com.vDevIdx);
+                            }
+                            else
+                            {
+                                vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
+                            }
                         }
-                        else
-                        {
-                            prnFinf(log_pix,"Sent refresh to mimas bm:%X , tdiff %ld mSec ,mimas %ld uSec\n", mimas_start_bm,  nsec_diff(&tnow, &before)/1000000l,  nsec_diff(&tnow, &mimas_ref)/1000l);
-                        }
-                        tnow = mimas_ref;
                     }
                 }
                 break;
@@ -635,7 +680,6 @@ void *pix_handler(void* dat)
                 prnErr(log_pix,"PixHandler received unhandled msgType %d\n", pkt->genmtyp);
             }
         }
-        msgRead(&pb->rq);
     }
     if(devs)free(devs);
 }
@@ -762,7 +806,7 @@ void* producer(void* dat)
         timeout.tv_nsec = (2ul * MILIS);
         msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
         time(&trm.ts2);
-        prnFinf(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
+        prnDbg(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
 
         if((artn->artnode->all % 1000000) == 0)
         {
@@ -838,7 +882,7 @@ int main(void)
     int res;
     sys_init();
     prnFinf(log_any,"PixLed Starting (tid:%d)...\n", gettid);
-    setLogLevel(log_ll,log_info);
+    //setLogLevel(log_ll,log_info);
     initMessaging();
     anetp->artPB = sock_pb;
     /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/

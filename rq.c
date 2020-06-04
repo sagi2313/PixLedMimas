@@ -373,7 +373,7 @@ uint32_t putNodes(post_box_t* pb, fl_t nd)
 		hd->tail = nd;
 	}
 	hd->count+=cnt;
-	prnFinf(log_ll,"PBputMany:%s Rem %d\n",pb->pbName, hd->count);
+	prnDbg(log_ll,"PBputMany:%s Rem %d\n",pb->pbName, hd->count);
 	pthread_spin_unlock(&hd->lock);
 	return(cnt);
 	//(void)__sync_val_compare_and_swap(&hd->head,(uint32_t)NULL,nd);

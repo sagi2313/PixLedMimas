@@ -153,6 +153,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     vdsm->expected_full_map = BIT64(uni_need)-1ul;
     vdsm->min_uni = devList.devs[idx].dev_com.start_address;
     vdsm->unis_cfg = uni_need;
+    devList.devs[idx].dev_com.vDevIdx = idx;
     return(idx);
 }
 
