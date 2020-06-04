@@ -686,6 +686,7 @@ void *pix_handler(void* dat)
 
 void* producer(void* dat)
 {
+<<<<<<< Updated upstream
     prnFinf(log_prod,"Produce Starting (tid:%d)...\n", gettid);
     uint32_t            i, msg_need;
     int32_t             msgcnt;
@@ -709,6 +710,21 @@ void* producer(void* dat)
     fl_t                cn2;
     fl_t                con_node;
     uint32_t            nodes_avail=0;
+=======
+    uint32_t idx, i, k;
+    uint_fast32_t hits[2+MMLEN];
+    peer_pack_t *p;
+    app_node_t* artn = (app_node_t*)d;
+    node_t*     n = artn->artnode;
+    post_box_t* pb = artn->artPB;
+    int mysock = n->sockfd;
+    fl_t cn;
+    mimas_state_t mSt;
+    ssize_t sock_ret;
+    int addr_len;
+    pid_t pid;
+    int ret;
+>>>>>>> Stashed changes
     long nsec = 0l;
     artn->artnode->miss=0;
     artn->artnode->all=0;
@@ -720,6 +736,33 @@ void* producer(void* dat)
     trace_msg_t trm;
     trm.ev = prod_rx_msgs;
     trm.seq = 0;
+<<<<<<< Updated upstream
+=======
+ #define handle_error_en(en, msg) \
+               do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+
+    ret = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+    if (ret != 0)
+               handle_error_en(ret, "Producer pthread_getaffinity_np");
+    cpuset.__bits[0] = 0xC;
+    ret = pthread_setaffinity_np(thread,sizeof(cpu_set_t), &cpuset);
+
+    if (ret != 0)
+               handle_error_en(ret, "Producer pthread_setaffinity_np");
+
+    ret = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+
+    if (ret != 0)
+               handle_error_en(ret, "Producer pthread_getaffinity_np2");
+    else
+    {
+        printf("Affinity on producer is set to 0x%0lx\n", cpuset.__bits[0]);
+    }
+
+    pid_t tid = gettid;
+    ret = setpriority(PRIO_PROCESS, tid, (PROD_PRIO_NICE ) );
+    printf("Producer set_nice to (%i) returns %d\n",PROD_PRIO_NICE, ret);
+>>>>>>> Stashed changes
 
     time_t     now;
     struct tm  ts;
@@ -732,7 +775,15 @@ void* producer(void* dat)
         msgs[i].msg_hdr.msg_iov    = &iovecs[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
     }
+<<<<<<< Updated upstream
     memset(&ntfyCons,0,sizeof(ntfyCons));
+=======
+
+    int32_t msgcnt;
+    setSockTimout(n->sockfd, 1000);
+    memset(hits,0,sizeof(hits));
+    peer_pack_t *packs[MMLEN];
+>>>>>>> Stashed changes
     memset(packs,0,sizeof(packs));
     ntfyCons.mtyp = msg_typ_socket_ntfy;
     ntfyCons.rq_owner = sock_pb;
@@ -743,6 +794,7 @@ void* producer(void* dat)
     setSockTimout(n->sockfd, 0);
     while(1)
     {
+<<<<<<< Updated upstream
         if((n->sm.DataOk == 1) && (n->sm.prev_state!=working_e))
         {
             setSockTimout(n->sockfd,500);
@@ -802,8 +854,9 @@ void* producer(void* dat)
         }
 
 
-        timeout.tv_sec = 0l;
-        timeout.tv_nsec = (2ul * MILIS);
+        timeout.tv_sec = 0;
+        timeout.tv_nsec = 40ul * MILIS;
+
         msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
         time(&trm.ts2);
         prnDbg(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
@@ -821,6 +874,7 @@ void* producer(void* dat)
             clock_gettime(CLOCK_REALTIME, &trm.ts);
             post_msg(&ev_pb->rq, &trm, sizeof(trace_msg_t));
             art_net_pack_t* a;
+
             n->last_rx = trm.ts;
             artn->artnode->all+=msgcnt;
             artn->artnode->packetsCnt+=msgcnt;
@@ -844,16 +898,110 @@ void* producer(void* dat)
         else
         {
             if(msgcnt == 0)
+
+            msgWrittenMulti(&pb->rq_head,  msgcnt);
+            do
+            {
+                k = rezerveMsgMulti(&pb->rq_head,packs, MMLEN );
+                for(i=0;i<k;i++)
+                {
+                    p = packs[i];
+                    if(p==NULL) break;
+                    iovecs[i].iov_base = &p->pl.art;
+                }
+                k = i;
+            }while(k<1);
+
+            artn->artnode->all+=msgcnt;
+            artn->artnode->packetsCnt+=msgcnt;
+        }
+        else
+        {
+            if(msgcnt>-1)
             {
                 prnDbg(log_prod,"msgs = 0\n");
                 artn->artnode->all++;
                 artn->artnode->miss++;
+
             }
             else
             {
                 int errLocal;
                 errLocal = show_socket_error_reason(n->sockfd);
                 prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
+
+                continue;
+            }
+            else
+            {
+                setSockTimout(n->sockfd, 10000);
+                n->sm.DataOk = 0;
+                if(errno == EAGAIN)
+                {
+                    int  lockFree=0;
+                    int tries=0;
+                    do{
+                        lockFree =  pthread_spin_trylock(&pb->rq_head.lock) ;
+                    }while((lockFree !=0  )&&(tries++<100));
+
+                    time(&now);
+                    SmReset(n, eResetSockTimeout);
+                    ts = *localtime(&now);
+                    strftime(tsbuf, sizeof(tsbuf), "%T", &ts);
+                    printf("EAGAIN %s : lock %d\n",tsbuf,lockFree);
+                    errno=0;
+                    if(lockFree==0)pthread_spin_unlock(&pb->rq_head.lock) ;
+                    msgcnt = 0;
+                    i = close(n->sockfd);
+                    if(i != 0) perror("close Socket:");
+                    else
+                    do{
+                        i = socketStart(n,ARTNET_PORT);
+                    if(i)sleep(1);
+                    }while(i!=0);
+                    continue;
+                }
+                else
+                {
+                    int errLocal;
+                    errLocal = show_socket_error_reason(n->sockfd);
+                    printf("errno %d, sock ret %d, fd %d, idx %d, errLocal %d\n", errno, sock_ret, n->sockfd, idx, errLocal);
+                    if(errno == 11)
+                    {
+                        SmReset(n, eResetSockTimeout);
+                    }
+                    else
+                    {
+
+                        SmReset(n, eResetUnknown);
+                    }
+                    errno = 0;
+                    setSockTimout(n->sockfd,0);
+                    mimas_all_black(&outs);
+                    bcm2835_delayMicroseconds( 6000ull );
+                    mSt = mimas_get_state();
+                    mimas_prn_state(&mSt);
+                    i = 0;
+                    while(((mSt.clk_rdy==0)||(mSt.sys_rdy==0))&&(mSt.idle == 0))
+                    {
+                        bcm2835_delayMicroseconds( 1000ull );
+                        mSt = mimas_get_state();
+                        if(++i>30)
+                        {
+                            printf("mimas maybe Stuck!\n");
+                            mimas_prn_state(&mSt);
+                            break;
+                        }
+                    }
+                    if((mSt.clk_rdy==0)||(mSt.sys_rdy==0))
+                    {
+                        printf("mimas needs reset...\n");
+                        mimas_reset();
+                        bcm2835_delayMicroseconds(1000ull);
+                        mimas_prn_state(NULL);
+                    }
+                    mimas_prn_state(NULL);
+                }
             }
         }
     }
