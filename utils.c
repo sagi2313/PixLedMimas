@@ -15,7 +15,7 @@ int cpu_online=0;
 
 log_lvl_e LogLvl[(int)log_src_max];
 uint32_t  LogMask = BIT32(log_src_max) -1u;
-const char *ll_str[] = {"DBG  ","INFO " ,"fINF","ERROR"};
+const char *ll_str[] = {"DBG  ","INFO " ,"INFO ","ERROR"};
 const char *ls_str[(int)log_src_max] =
 {
     "GEN ", "PROD", "CONS", "TRAC", "EVNT", "AHAN", "PIXH", "PWMH", "DMXH", "LL  ", "MIMA", "GeN "

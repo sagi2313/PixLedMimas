@@ -882,7 +882,7 @@ int main(void)
     int res;
     sys_init();
     prnFinf(log_any,"PixLed Starting (tid:%d)...\n", gettid);
-    //setLogLevel(log_ll,log_info);
+    //setLogLevel(log_pix,log_dbg);
     initMessaging();
     anetp->artPB = sock_pb;
     /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/

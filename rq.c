@@ -528,7 +528,7 @@ int msgRezerveMultiNB(post_box_t* pb, fl_t* nodes, uint32_t count)
     if(hd->count < hd->low_mark)
     {
         hd->low_mark = hd->count;
-        prnErr(log_ll,"LL %s low mark dropped: %d!\n", pb->pbName, hd->low_mark);
+        prnFinf(log_ll,"LL %s low mark dropped: %d!\n", pb->pbName, hd->low_mark);
     }
     //prnDbg(log_ll,"\t\t\t\t\t PB:%s Req %d, Rez %d Rem %d\n",pb->pbName, count, cnt, hd->count);
 	pthread_spin_unlock(&hd->lock);
