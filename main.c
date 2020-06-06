@@ -870,9 +870,9 @@ int main(void)
     prnFinf(log_any,"Starting Web Server...\n");
     while(1)
     {
-        webServStart();
-        prnErr(log_any,"Web Server exited, restarting...\n");
-        sleep(1);
+        //webServStart();
+        //prnErr(log_any,"Web Server exited, restarting...\n");
+        sleep(10);
     }
     return(0);
 }
