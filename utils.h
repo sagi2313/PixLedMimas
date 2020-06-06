@@ -230,4 +230,7 @@ int tmr_create(uint32_t *timerid );
 void* one_sec(void* d);
 void threadConfig(task_cfg_t* tcfg, log_src_e );
 int sys_init(void);
+void prnDev(int idx);
+void setHandler(void (*handler)(int,siginfo_t *,void *));
+void print_trace(void);
 #endif // UTILS_H_INCLUDED

@@ -44,19 +44,12 @@ post_box_t*         ev_pb = NULL;
 post_box_t*         pwm_pb = NULL;
 post_box_t*         pix_pb = NULL;
 post_box_t*         pkt_pb = NULL;
-int sock_sec;
-app_node_t prods[2];
-app_node_t* anetp=&prods[0];
-/*app_node_t* ascnp=&prods[1];*/
-int altBind(int sockfd);
-//recFile_t rf;
+
+app_node_t          prods[2];
+app_node_t*         anetp=&prods[0];
 
 
-enum{
-idle_e=0,
-packet_proc_e,
-packet2packet_e
-}times_e;
+
 struct timespec timers[3];
 struct timespec tmp;
 uint32_t timeloop, proc_cnt=0;
@@ -64,50 +57,6 @@ uint64_t timesum;
 uint64_t timesum_mimas;
 uint64_t timesum_proc;
 clock_t t1,t2, t3, p1,p2;
-
-void prnDev(int idx)
-{
-    int i;
-    if(idx!=-1)
-    {
-        switch(devList.devs[idx].dev_com.dev_type)
-        {
-            case unused_dev:
-            {
-                break;
-            }
-            case ws_pix_dev:
-            {
-                    if(devList.devs[idx].dev_com.start_address == 0xFFFF)
-                    {
-                        printf("Address %u assigned automatically for device %d\n", devList.devs[idx].pix_devs[0]->com.start_address, idx);
-                        devList.devs[idx].dev_com.start_address = devList.devs[idx].pix_devs[0]->com.start_address;
-                    }
-                    printf("Dev %d pixelCount %u, uniCount  %u subDevices %u startAddr %u, endAddr %u\n", \
-                    idx, devList.devs[idx].pixel_count, devList.devs[idx].uni_count, devList.devs[idx].sub_dev_cnt, devList.devs[idx].dev_com.start_address, \
-                    devList.devs[idx].dev_com.end_address);
-                    for(i=0;i< devList.devs[idx].sub_dev_cnt;i++)
-                    {
-                        ws_pix_vdev_t* pxd = devList.devs[idx].pix_devs[i];
-                        printf("subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
-                        i,pxd->com.start_address, pxd->com.end_address, pxd->pixel_count, pxd->pix_per_uni, pxd->out_start_id);
-
-                    }
-                break;
-            }
-            case dmx_out_dev:
-            {
-                break;
-            }
-            case pwm_dev:
-            {
-                break;
-            }
-            default:break;
-        }
-
-    }
-}
 
 void make_a_dev(void)
 {
@@ -237,9 +186,6 @@ void* consumer(void* dat)
     trms[4]=&trm[4];
 
     threadConfig(tcfg, log_con);
-    clock_getres(CLOCK_PROCESS_CPUTIME_ID, &timers[1]);
-    prnDbg(log_con,"ClockRes = %lusec, %u nsec\n", timers[1].tv_sec, timers[1].tv_nsec);
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &timers[idle_e]);
     t1 = clock();
 
     check_unis = 0;
@@ -479,7 +425,7 @@ void *pix_handler(void* dat)
     task_cfg_t* tcfg = (task_cfg_t*)dat;
     threadConfig(tcfg, log_pix);
     prnFinf(log_pix,"PixHandler Started (tid:%d)...\n", gettid);
-
+    print_trace();
     int*                devs = NULL;
     int                 devCnt, i, j;
     mimas_out_dev_t**   vDevs;
@@ -518,6 +464,7 @@ void *pix_handler(void* dat)
     clock_gettime(CLOCK_REALTIME, &tnow);
     before = tnow;
     mimas_ref = tnow;
+    int Nulls=0;
     while(1)
     {
         if((cn == NULL) &&(pkt))   msgRead(&pb->rq);
@@ -550,6 +497,7 @@ void *pix_handler(void* dat)
             {
                 tnow = mimas_ref;
                 i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                //usleep(20000l);
                 clock_gettime(CLOCK_REALTIME, &mimas_ref);
                 if(i!=0)
                 {
@@ -576,8 +524,14 @@ void *pix_handler(void* dat)
                 DuplicateUni = 0;
                 updMimas=0;
             }
-
+            if(Nulls++>2)
+            {
+                usleep(15000l);
+                Nulls = 0;
+                prnErr(log_pix,"SleepTime\n");
+            }
         }while(pkt == NULL);
+        Nulls=0;
         switch(pkt->genmtyp)
         {
             case msg_typ_socket_ntfy:

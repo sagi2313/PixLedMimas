@@ -2,11 +2,10 @@
 #include "utils.h"
 #include "mimas_cfg.h"
 #include <sys/sysinfo.h>
+#include "vdevs.h"
 
-void setHandler(void (*handler)(int,siginfo_t *,void *));
-void fault_handler(int signo, siginfo_t *info, void *extra);
-void print_trace(void);
 void print_trace_gdb();
+void fault_handler(int signo, siginfo_t *info, void *extra);
 
 extern app_node_t* anetp;
 node_t* Node = NULL;
@@ -1310,4 +1309,49 @@ void setHandler(void (*handler)(int,siginfo_t *,void *))
 		_exit(1);
 	}
     printf("Done setting up SIG_HAN\n");
+}
+
+
+void prnDev(int idx)
+{
+    int i;
+    if(idx!=-1)
+    {
+        switch(devList.devs[idx].dev_com.dev_type)
+        {
+            case unused_dev:
+            {
+                break;
+            }
+            case ws_pix_dev:
+            {
+                    if(devList.devs[idx].dev_com.start_address == 0xFFFF)
+                    {
+                        printf("Address %u assigned automatically for device %d\n", devList.devs[idx].pix_devs[0]->com.start_address, idx);
+                        devList.devs[idx].dev_com.start_address = devList.devs[idx].pix_devs[0]->com.start_address;
+                    }
+                    printf("Dev %d pixelCount %u, uniCount  %u subDevices %u startAddr %u, endAddr %u\n", \
+                    idx, devList.devs[idx].pixel_count, devList.devs[idx].uni_count, devList.devs[idx].sub_dev_cnt, devList.devs[idx].dev_com.start_address, \
+                    devList.devs[idx].dev_com.end_address);
+                    for(i=0;i< devList.devs[idx].sub_dev_cnt;i++)
+                    {
+                        ws_pix_vdev_t* pxd = devList.devs[idx].pix_devs[i];
+                        printf("subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
+                        i,pxd->com.start_address, pxd->com.end_address, pxd->pixel_count, pxd->pix_per_uni, pxd->out_start_id);
+
+                    }
+                break;
+            }
+            case dmx_out_dev:
+            {
+                break;
+            }
+            case pwm_dev:
+            {
+                break;
+            }
+            default:break;
+        }
+
+    }
 }
