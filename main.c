@@ -132,6 +132,306 @@ int sendOutToMimas(int oSel)
     return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen));
 }
 
+
+
+void  consumeList(peer_pack_t*         pkt)
+{
+    //setHandler(fault_handler);
+    static int          sconInit=0;
+    uint8_t             check_unis;
+    static int          devIdx[MAX_VDEV_CNT] ,devCnt;
+    int                 i, rc, ticks_to_sleep;
+    uint32_t            popcnt=0;
+    peer_pack_t         ppack;
+    //peer_pack_t*         pkt =  &ppack;
+    uint64_t            peer_id;
+    //task_cfg_t*         tcfg = (task_cfg_t*)dat;
+    //app_node_t*         artn = (app_node_t*)tcfg->iniData;
+
+    //post_box_t*         pb = artn->artPB;
+    //node_t*             me = artn->artnode;
+
+    static node_branch_t       branches[5];
+    static node_branch_t*      pwmBr;
+    static node_branch_t*      pixBr;
+    static node_branch_t*      localBr;
+    static node_branch_t*      dropBr;
+    static node_branch_t*      miscBr;
+
+    fl_t                cn, cnn, nodes;
+    post_box_t*         pb_owner;
+    sockdat_ntfy_t*     msg;
+    art_net_pack_t*     ap;
+    peer_pack_t*        pp;
+    art_resp_e          art_res;
+    gen_addres_u        raw_addr;
+
+    mimas_out_dev_t*            cdev;
+    static trace_msg_t*        trms[5];
+    static struct timespec     ts_now;
+    long                        elapsed;
+
+    timeloop=0;
+    timesum =0;
+    timesum_mimas=0;
+    timesum_proc=0;
+    static trace_msg_t trm[5];
+
+
+    if(sconInit==0)
+    {
+        pwmBr = &branches[0];
+        pixBr = &branches[1];
+        localBr =&branches[2];
+        dropBr = &branches[3];
+        miscBr = &branches[4];
+        trm[cons_msg_pop].ev            = cons_msg_pop;
+        trm[cons_msg_proced].ev         = cons_msg_proced;
+        trm[cons_pack_full].ev          = cons_pack_full;
+        trm[cons_mimas_refreshed].ev    = cons_mimas_refreshed;
+        trm[cons_mimas_start].ev        = cons_mimas_start;
+        trms[0]=&trm[0];
+        trms[1]=&trm[1];
+        trms[2]=&trm[2];
+        trms[3]=&trm[3];
+        trms[4]=&trm[4];
+        check_unis = 0;
+        ticks_to_sleep = 6;
+        sconInit = 1;
+    }
+
+
+
+    //threadConfig(tcfg, log_con);
+    t1 = clock();
+    clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
+   // while(1)
+   // {
+        cdev = NULL;
+        memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
+        do
+        {
+            //pkt = getMsg(&sock_pb->rq);
+            if(pkt == NULL)
+            {
+                if(ticks_to_sleep<5)ticks_to_sleep++;
+                if(ticks_to_sleep == 5)
+                {
+                    clock_gettime(CLOCK_REALTIME, &ts_now);
+                    elapsed = nsec_diff(&ts_now, &trms[0]->ts);
+                    if(elapsed > CONS_TOV)
+                    {
+                        clearBM(devList.tmp_uni_map);
+                        clearBM(devList.glo_uni_map);
+                        check_unis=0;
+                        ticks_to_sleep++;
+                        trms[0]->ts = ts_now;
+                        prnFinf(log_con, "Elapsed ovf : %ld nsec\npktPb lowMark = %d\n", elapsed, pkt_pb->ll.pile.low_mark );
+                        pkt_pb->ll.pile.low_mark=pkt_pb->ll.pile.maxCount+1;
+                    }
+                    //usleep(5);
+                }
+                //pthread_yield();
+            }
+        }while(pkt == NULL);
+        clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
+        ticks_to_sleep = 0;
+        switch(pkt->genmtyp)
+        {
+            case msg_typ_socket_data:
+            {
+                //msgRead(&sock_pb->rq);
+                printf("Unexpected msg\n");
+                return;
+                break;
+            }
+            case msg_typ_socket_ntfy:
+            {
+                trms[0]->msg_cnt = popcnt++;
+                post_msg(&ev_pb->rq, trms[0],sizeof(trace_msg_t));
+                nodes = pkt->dataNtfy.datapt;
+                pb_owner = pkt->dataNtfy.rq_owner;
+                //prnLLdetail(nodes, "CONS", "ConsRcved");
+                //msgRead(&sock_pb->rq);
+                break;
+            }
+            case msg_typ_sys_event:
+            {
+                switch(pkt->sys_ev.ev_type)
+                {
+                    case sys_ev_socket_timeout:
+                    {
+                        printf("Socket TimeOut received on sock %d\n", pkt->sys_ev.data1);
+                        break;
+                    }
+                    default:
+                    {
+                        printf("Socket event %d received on sock %d\n", (uint32_t)pkt->sys_ev.ev_type, pkt->sys_ev.data1);
+                        break;
+                    }
+                }
+                //msgRead(&sock_pb->rq);
+                return;
+                break;
+            }
+            default:
+            {
+                printf("Unknown msgType received : %u\n", (uint32_t)pkt->genmtyp);
+                //msgRead(&sock_pb->rq);
+                return;
+                break;
+            }
+        }
+        cn = nodes;
+        sock_data_msg_t* dt;
+        int nodecnt = 0;
+        if(check_unis && (devList.glo_uni_map->reserved < check_unis) )
+        {
+            if(devList.glo_uni_map->reserved>devList.tmp_uni_map->reserved)
+            {
+                prn(log_finf,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
+                bm_t* bm = devList.glo_uni_map;
+                devList.glo_uni_map = devList.tmp_uni_map ;
+                devList.tmp_uni_map = bm;
+
+            }
+            clearBM(devList.tmp_uni_map);
+            check_unis=0;
+        }
+        taken_e taken;
+        while(cn)
+        {
+            nodecnt++;
+            dt = cn->item.pl.msg;
+            peer_id = (*(uint64_t*)&dt->sender);
+            ap =  &dt->pl.art;
+            art_res = ArtNetDecode(ap);
+            switch(art_res)
+            {
+                case art_data_e:
+                {
+                    raw_addr.anet = ap->ArtDmxOut.a_net;
+                    check_unis++;
+                    taken = updateBM(devList.tmp_uni_map,bm_reserved_e,raw_addr.addr);
+                    if(taken == bm_free_e)
+                    {
+                        check_unis=0;
+                        prnDbg(log_con,"Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
+                    }
+                    if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
+                    {
+                        taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
+                        if(taken == bm_free_e)
+                        {
+                            prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                            prnFinf(log_con,"Added uni %d to global,Receiving %u universes\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                        }
+                    }
+
+                    devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
+
+                    if(devCnt <1)
+                    {
+                        addToBranch(dropBr,cn);
+                        cn = cn->nxt;
+                        continue;
+                    }
+                    vdevs_e devdstinct = unused_dev;
+                    for(i=0;i<devCnt;i++)
+                    {
+                         cdev = &devList.devs[devIdx[i]];
+                         vDevSetPeer(peer_id, devIdx[i]);
+
+                        if (cdev==NULL) continue;
+                        if( devdstinct & GET_VDEV_TYPE(*cdev))continue; // just get distinct devices for this pkt/address
+                        switch(GET_VDEV_TYPE(*cdev))
+                        {
+                            case ws_pix_dev:
+                            {
+                                cn->item.pl.vDevId = devIdx[i];
+                                addToBranch(pixBr,cn);
+                                devdstinct|=ws_pix_dev;
+                                break;
+                            }
+                            case pwm_dev:
+                            {
+                                cn->item.pl.vDevId = devIdx[i];
+                                addToBranch(pwmBr,cn);
+                                devdstinct|=pwm_dev;
+                                break;
+                            }
+                            default:
+                            {
+                                prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
+                                break;
+                            }
+                        } // end of switch devType
+                    }   // end of devices loop
+                    break;
+                } // end of art_res switch
+                case art_poll_e:
+                {
+                        addToBranch(localBr, cn);
+                        break;
+                }
+                case art_syn_pack_e:
+                {
+                    prnErr(log_con, "A SYNC!!!!\n");
+                    addToBranch(dropBr,cn);
+                    break;
+                }
+                default:
+                {
+                    prnErr(log_con,"\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
+                    addToBranch(dropBr,cn);
+                    //putNode(cn->pb, cn, &cnn);
+                    //cn = cnn;
+                }
+            }
+            cn = cn->nxt;
+        } // end of cn loop
+        prnDbg(log_con,"Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
+
+        if(pwmBr->hd)
+        {
+            sockdat_ntfy_t pwmmsg;
+            pwmmsg.mtyp = msg_typ_socket_ntfy;
+            pwmmsg.rq_owner = pwmBr->hd->pb;
+            pwmmsg.datapt = pwmBr->hd;
+            pwmBr->lst->nxt  = NULL;
+            prnLLdetail(pwmBr->hd, "CONS", "PwmLL");
+            post_msg(&pwm_pb->rq,&pwmmsg,sizeof(sockdat_ntfy_t));
+        }
+        if(pixBr->hd)
+        {
+            sockdat_ntfy_t pixmsg;
+            pixmsg.mtyp = msg_typ_socket_ntfy;
+            pixmsg.rq_owner = pixBr->hd->pb;
+            pixmsg.datapt = pixBr->hd;
+            pixBr->lst->nxt  = NULL;
+            prnLLdetail(pixBr->hd, "CONS", "PixLL");
+            post_msg(&pix_pb->rq,&pixmsg,sizeof(sockdat_ntfy_t));
+            prnDbg(log_con,"Sending pix Pkt to handler\n");
+        }
+        if(dropBr->hd)
+        {
+            dropBr->lst->nxt  = NULL;
+            prnLLdetail(dropBr->hd, "DROPS", "Drops");
+            i = putNodes(dropBr->hd->pb, dropBr->hd);
+            prnDbg(log_con,"Dropped %d unamapped Pkts\n",i);
+        }
+        if(localBr->hd)
+        {
+            localBr->lst->nxt = NULL;
+            make_artnet_resp(localBr->hd->item.pl.msg);
+            i = putNodes(localBr->hd->pb, localBr->hd);
+        }
+
+   // }
+        //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full)
+}
+
+
 void* consumer(void* dat)
 {
     //setHandler(fault_handler);
@@ -216,7 +516,6 @@ void* consumer(void* dat)
                          pkt_pb->ll.pile.low_mark=pkt_pb->ll.pile.maxCount+1;
                     }
                     //usleep(5);
-
                 }
                 //pthread_yield();
             }
@@ -434,6 +733,7 @@ void *pix_handler(void* dat)
     pix_dev_pt          pixDev;
     int                 hwId=-1;
     uint16_t            mimas_start_bm=0;
+    uint32_t            mimas_proto_bm=0;
     addressing_t        absAddr, relAddr;
     struct timespec     tnow,before, mimas_ref, tcheck;
     uint32_t            vDevsReadyBm = 0;
@@ -496,7 +796,7 @@ void *pix_handler(void* dat)
             if(updMimas)
             {
                 tnow = mimas_ref;
-                i=mimas_refresh_start_stream(mimas_start_bm,0x00C0);
+                i=mimas_refresh_start_stream(mimas_start_bm,mimas_proto_bm);
                 //usleep(20000l);
                 clock_gettime(CLOCK_REALTIME, &mimas_ref);
                 if(i!=0)
@@ -518,13 +818,15 @@ void *pix_handler(void* dat)
                         outs[pixDev->out_start_id].fillMap = 0;
                         outs[pixDev->out_start_id].dlen = 0;
                         mimas_start_bm&=~(BIT16(pixDev->out_start_id));
+                        //SET_PROTO(mimas_proto_bm,STRM_WS,pixDev->out_start_id);
+                        mimas_proto_bm=0;
                     }
                     vDevsReadyBm&=~(BIT32(devs[i]));
                 }
                 DuplicateUni = 0;
                 updMimas=0;
             }
-            if(Nulls++>2)
+            if(Nulls++>500)
             {
                 usleep(15000l);
                 Nulls = 0;
@@ -594,6 +896,7 @@ void *pix_handler(void* dat)
                         if(i) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, i);}
                         else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
                         mimas_start_bm|=BIT16(hwId);
+                        SET_PROTO(mimas_proto_bm, STRM_WS, hwId);
 
                         if(sm->curr_map == sm->expected_full_map)
                         {
@@ -671,6 +974,7 @@ void* producer(void* dat)
     pthread_t thread;
     thread = pthread_self();
     struct timespec timeout;
+    struct timespec* SockTov = NULL;
     trace_msg_t trm;
     trm.ev = prod_rx_msgs;
     trm.seq = 0;
@@ -697,10 +1001,6 @@ void* producer(void* dat)
     setSockTimout(n->sockfd, 0);
     while(1)
     {
-        if((n->sm.DataOk == 1) && (n->sm.prev_state!=working_e))
-        {
-            setSockTimout(n->sockfd,500);
-        }
         msg_need = batch;
         batch = (MAX(2,RCVED_UNIS(devList)));
         if(batch!=msg_need)prnFinf(log_prod,"Batch changed %d -> %d\n", msg_need, batch);
@@ -736,7 +1036,7 @@ void* producer(void* dat)
         {
             msg_need = nodes_avail;
         }
-        prnLLdetail(nodes, "PROD", "ReadySlots");
+        //prnLLdetail(nodes, "PROD", "ReadySlots");
         cn = nodes;
         for(i=0;i<msg_need;i++)
         {
@@ -754,11 +1054,11 @@ void* producer(void* dat)
             prnErr(log_prod,"Serious ERROR: msg_need was %d, only %d were valid\n", msg_need, i);
             msg_need = i;
         }
-
-
         timeout.tv_sec = 0l;
-        timeout.tv_nsec = (2ul * MILIS);
-        msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, &timeout);
+        timeout.tv_nsec = (0ul * MILIS);
+
+
+        msgcnt = recvmmsg(n->sockfd, msgs, msg_need, MSG_WAITALL, SockTov);
         time(&trm.ts2);
         prnDbg(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
 
@@ -771,6 +1071,13 @@ void* producer(void* dat)
 
         if(msgcnt>0)
         {
+            if(n->sm.DataOk == 0)
+            {
+                n->sm.DataOk = 1;
+                setSockTimout(n->sockfd,500);
+                SockTov = &timeout;
+                prnFinf(log_prod,"SetSock timeout %d mSec\n",500);
+            }
             trm.msg_cnt = msgcnt;
             clock_gettime(CLOCK_REALTIME, &trm.ts);
             post_msg(&ev_pb->rq, &trm, sizeof(trace_msg_t));
@@ -791,8 +1098,9 @@ void* producer(void* dat)
             }
             nodes_avail-=msgcnt;
             ntfyCons.datapt = nodes;
-            prnLLdetail(nodes, "PROD", "SendingSlots");
-            post_msg(&sock_pb->rq,&ntfyCons,sizeof(sockdat_ntfy_t));
+            //prnLLdetail(nodes, "PROD", "SendingSlots");
+            consumeList(&ntfyCons);
+            //post_msg(&sock_pb->rq,&ntfyCons,sizeof(sockdat_ntfy_t));
             nodes = cn2;
         }
         else
@@ -805,6 +1113,10 @@ void* producer(void* dat)
             }
             else
             {
+
+                n->sm.DataOk = 0;
+                setSockTimout(n->sockfd,0);
+                SockTov = NULL;
                 int errLocal;
                 errLocal = show_socket_error_reason(n->sockfd);
                 prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
@@ -845,7 +1157,9 @@ int main(void)
     init_mimas_vdevs();
     InitOuts();
     initMimasIntf(NULL);
+
     mimas_all_black(&outs);
+
     usleep(100000);
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);
@@ -860,10 +1174,10 @@ int main(void)
 
     tasks[2].iniData = (void*)anetp;
     pthread_create(&tasks[2].thread,NULL,pix_handler, (void*)&tasks[2]);
-
+/*
     tasks[1].iniData = (void*)anetp;
     pthread_create(&tasks[1].thread,NULL,consumer, (void*)&tasks[1]);
-
+*/
     tasks[0].iniData = (void*)anetp;
     pthread_create(&tasks[0].thread,NULL,producer, (void*)&tasks[0]);
     print_trace();
@@ -950,7 +1264,7 @@ void pmwHan(void* dat)
     pwm_msg.ch_count[1] = MIMAS_PWM_OUT_PER_GRP_CNT;
     pwm_msg.data[0] = pwm_d[0];
     pwm_msg.data[1] = pwm_d[1];
-    post_msg(&pb->rq,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
+   // post_msg(&pb->rq,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
 
     int rc;
     struct timespec ts[4];

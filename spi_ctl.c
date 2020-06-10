@@ -40,7 +40,7 @@ int bits=8;
 uint8_t mimas_pwm[20];
 struct spi_ioc_transfer tr[13];
 struct spi_ioc_transfer tr_pwm;
-static uint8_t start_stream_header[4];
+static uint8_t start_stream_header[MIMAS_HDR_LEN];
 uint_fast64_t spin_trycolission=0ul;
 uint_fast64_t spin_blocks=0ul;
 uint_fast64_t spin_hit=0ul;
@@ -179,7 +179,7 @@ static void pabort(const char *s)
 static const char *device = "/dev/spidev0.0";
 static uint8_t mode;
 //static uint8_t bits = 8;
-static uint32_t speed = 80000000u;
+static uint32_t speed = 40000000u;
 static uint16_t delay;
 
 int mimas_send_packet(int chan, uint8_t* data, int len)
@@ -211,7 +211,9 @@ int mimas_send_packet(int chan, uint8_t* data, int len)
     return(0);
 }
 
-/*prepare and save data for messages to be sent to mimas in local buffer 'tr */
+/*prepare and save data for messages to be sent to mimas in local buffer 'tr
+    chan is numeric ID of channel starting at 0.
+*/
 int mimas_store_packet(int chan, uint8_t* data, int len)
 {
 
@@ -220,14 +222,13 @@ int mimas_store_packet(int chan, uint8_t* data, int len)
     int ret;
     uint16_t ch_bm =  1 << chan;
     data[0] = STREAM_PKT_SEND;
-
-    data[1]= (ch_bm & 0xFF);
-    //data[2]= ((ch_bm >> 8) <<4) | (len >> 8);
-    data[2]= ((ch_bm >> 4) & 0xF0) | (len >> 8);
-    data[3]= len & 0xFF;
-
+    data[1] = (ch_bm & 0xFF);
+    data[2] = ((ch_bm>>8) & 0x0F);
+    data[3] = (len &0xFF);
+    data[4] = (len>>8) & 0xFF;
+    data[5] = 0;
     tr[chan].tx_buf = (unsigned long)(void*)data;
-    tr[chan].len =4u + len;
+    tr[chan].len = MIMAS_HDR_LEN + len;
     return(0);
 }
 
@@ -264,7 +265,7 @@ int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
         p++;
         val++;
     }
-    tr_pwm.len =4u + (2 * i);
+    tr_pwm.len = MIMAS_HDR_LEN + (2 * i);
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*
@@ -296,7 +297,7 @@ int mimas_store_pwm_period(uint8_t grp, uint16_t val)
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
     *(uint16_t*)&mimas_pwm[4] = val;
-    tr_pwm.len = 6u;
+    tr_pwm.len = MIMAS_HDR_LEN;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -327,7 +328,7 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
     mimas_pwm[4] = val;
-    tr_pwm.len = 5u;
+    tr_pwm.len = 1u  + MIMAS_HDR_LEN;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
@@ -371,7 +372,7 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
         j++;
         if(i>7)break;
     }
-    tr_pwm.len =4u + j;
+    tr_pwm.len = MIMAS_HDR_LEN + j;
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -401,7 +402,7 @@ Sets pwm group enable
     mimas_pwm[2] = grp;
     mimas_pwm[3] = 1;
     mimas_pwm[4] = enabled & 1;
-    tr_pwm.len = 5u;
+    tr_pwm.len = 1u + MIMAS_HDR_LEN;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
@@ -439,7 +440,7 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
     return(0);
 }
 
-int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
+int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
 {
     if(fd == -1)return(-1);
 #ifdef MIMAS_TIME_STAT
@@ -450,14 +451,24 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
 
     if(start_bm == 0 ) return(-3);
     start_bm &= MIMAS_STREAM_BM;
-    proto_bm &= MIMAS_STREAM_BM;
-
+    proto_bm &= MIMAS_PROTO_BM;
+    mimas_state_t mst;
     uint16_t temp_bm=0;
     uint8_t *ch;
     if(spi_lock()!=0) return(-1000);
 
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
+        mst = mimas_get_state();
+        if( (mst.clk_rdy==0) || (mst.idle == 1) ||(mst.sys_rdy == 0) )
+        {
+        do{
+            MIMAS_RESET;
+            usleep(10000ul);
+            mst = mimas_get_state();
+            }while( (mst.clk_rdy==0) || (mst.idle == 1) ||(mst.sys_rdy == 0) );
+
+        }
         if((start_bm & BIT32(i))==0)continue;
         if(tr[i].len>0)
         {
@@ -489,9 +500,10 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm)
         }
     }
     start_stream_header[1]= temp_bm  & 0xFF; // use the  value that probably wont crash mimas
-    start_stream_header[2]= ((temp_bm >> 4) & 0xF0);
-    start_stream_header[2]|= (proto_bm>> 8);
-    start_stream_header[3] = proto_bm & 0xFF;
+    start_stream_header[2]= ((temp_bm >> 8) & 0x0F);
+    start_stream_header[3]= (proto_bm & 0xFF);
+    start_stream_header[4] = (proto_bm>>8) & 0xFF;
+    start_stream_header[5] = (proto_bm>>16) & 0xFF;
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);
     spi_unlock();
     if (ret < 1)
@@ -570,10 +582,12 @@ int initSPI(void)
 	start_stream_header[1] = 0;
 	start_stream_header[2] = 0;
 	start_stream_header[3] = 0;
+	start_stream_header[4] = 0;
+	start_stream_header[5] = 0;
 
     tr[12].tx_buf = (unsigned long)(void*)&start_stream_header[0];
 	tr[12].rx_buf = (unsigned long)(void*)NULL;
-	tr[12].len = 4;
+	tr[12].len = MIMAS_HDR_LEN;
 	tr[12].delay_usecs = delay;
 	tr[12].speed_hz = speed;
 	tr[12].bits_per_word = 8;

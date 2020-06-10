@@ -12,15 +12,24 @@
 /* Streamer definitions */
 #define MIMAS_STREAM_OUT_CNT        (12)
 #define MIMAS_STREAM_BM             ((uint32_t)(BIT32(MIMAS_STREAM_OUT_CNT) -1u) )
-
+#define MIMAS_PROTO_BM              ((uint32_t)(BIT32( 2u * MIMAS_STREAM_OUT_CNT) -1u) )
 /* PWM definitions */
 #define MIMAS_PWM_GROUP_CNT         (2)
 #define MIMAS_PWM_OUT_PER_GRP_CNT   (8)
 #define MIMAS_PWM_OUT_CNT           (MIMAS_PWM_OUT_PER_GRP_CNT * MIMAS_PWM_GROUP_CNT)
+#define MIMAS_HDR_LEN               (6u)
 
 #define PWM_GRP_A       1
 #define PWM_GRP_B       2
 #define PWM_GRP_ALL     (PWM_GRP_A | PWM_GRP_B)
+
+#define STRM_WS         0x0
+#define STRM_SPI         0x1
+#define STRM_DMX         0x2
+#define STRM_CLR         0x3
+
+#define SET_PROTO(R, P, I)  do{ R&=~(3<< (2*I) ); R|=(P<< (2*I));}while(0);
+
 typedef struct
 {
     uint8_t clk_rdy:1;

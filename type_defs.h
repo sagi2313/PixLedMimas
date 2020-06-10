@@ -134,15 +134,16 @@ typedef enum /*protoSelect_e*/
     protosACN
 }protoSelect_e;
 
-
+#pragma pack(1)
 typedef struct
 {
     uint8_t dmx_data[512];
 }dmx_uni_out_t;
 
+
 typedef struct
 {
-    uint8_t mimas_header[4];
+    uint8_t mimas_header[6];
     dmx_uni_out_t dmxp[UNI_PER_OUT];
 }mimaspack_t;
 
@@ -157,7 +158,7 @@ typedef struct
     color_mapping_e colMap;
     mimaspack_t     mpack;
 }out_def_t;
-
+#pragma pack()
 typedef struct
 {
     char                if_name[32];

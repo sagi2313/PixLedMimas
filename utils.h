@@ -152,7 +152,7 @@ int initMimasIntf(void* d);
 /*int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm);*/
 int mimas_store_packet(int chan, uint8_t* data, int len);
 
-int mimas_refresh_start_stream(uint16_t start_bm, uint16_t proto_bm);
+int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm);
 int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt);
 int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt);
 int mimas_store_pwm_period(uint8_t grp, uint16_t val);

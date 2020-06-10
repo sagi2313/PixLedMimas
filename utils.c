@@ -862,16 +862,49 @@ int setIP(char* newIP, int ifIdx)
 void mimas_all_black(out_def_t* outs)
 {
     int i;
-
+    /*
+    uint8_t dumm[UNI_PER_OUT * 512];
+    for(i=0;i<(UNI_PER_OUT * 512);i++)
+    {
+        dumm[i] = i%0x80;
+    }
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
         if( MIMAS_STREAM_BM & (BIT32(i)) )
         {
+            memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
             mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
         }
     }
-    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0);
+    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0x555);
+    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
+    {
+        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
+        if( MIMAS_STREAM_BM & (BIT32(i)) )
+        {
+            memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
+            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
+        }
+    }
+    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0xAAA);
+    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
+    */
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
+    {
+        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
+        if( MIMAS_STREAM_BM & (BIT32(i)) )
+        {
+            //memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
+            memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
+            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
+        }
+    }
+    uint32_t proto = 0;
+   // SET_PROTO(proto, STRM_WS, 0);
+   // SET_PROTO(proto, STRM_SPI, 1);
+    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,proto);
     if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
 }
 
@@ -894,7 +927,8 @@ inline void mimas_prn_state(mimas_state_t *st)
 
 int initMimas(void)
 {
-    int retry = 10;
+    int retry = 3;
+
     uint8_t clk_rdy, sys_ready, irq;
     bcm2835_gpio_fsel(MIMAS_RST, BCM2835_GPIO_FSEL_OUTP);
     bcm2835_gpio_fsel(MIMAS_SYS_RDY, BCM2835_GPIO_FSEL_INPT);
@@ -904,12 +938,12 @@ int initMimas(void)
 
     bcm2835_gpio_set(MIMAS_RST);
     //bcm2835_delayMicroseconds(10000ull);
-    usleep(10000ul);
+    usleep(5000ul);
     bcm2835_gpio_clr(MIMAS_RST);
     //bcm2835_delayMicroseconds(25000ull);
-    usleep(30000ul);
+    usleep(10000ul);
     bcm2835_gpio_set(MIMAS_RST);
-    usleep(2000ul);
+    usleep(5000ul);
 
     do
     {
@@ -918,15 +952,8 @@ int initMimas(void)
         irq  =  bcm2835_gpio_lev(MIMAS_IDLE);
         uint32_t pads=bcm2835_gpio_pad(BCM2835_PADS_GPIO_0_27);
         printf("clk_rdy %u, sys_rdy = %u, irq = %u, pads = %X\n", clk_rdy, sys_ready, irq, pads);
-/*
-        pads = (BCM2835_PAD_PASSWRD | BCM2835_PAD_DRIVE_16mA) ;
-        bcm2835_gpio_set_pad(BCM2835_PADS_GPIO_0_27, pads);
-        printf("setting pads to %X\t", pads);
-        pads=bcm2835_gpio_pad(BCM2835_PADS_GPIO_0_27);
-        printf("new pads val  %X\n", pads);
-        */
         if((clk_rdy==1) && (sys_ready == 1) && (irq == 0))return(0);
-        bcm2835_delayMicroseconds(1000000ull);
+        bcm2835_delayMicroseconds(10000ull);
 
     }while(retry--);
     return(-1);
