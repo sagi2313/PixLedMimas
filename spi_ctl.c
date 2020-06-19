@@ -36,6 +36,11 @@
 #include <stdatomic.h>
 static int fd = -1;
 int bits=8;
+
+static const char *device = "/dev/spidev0.0";
+static uint8_t mode;
+static uint32_t speed = 40000000u;
+static uint16_t delay;
 //uint8_t mimas[8][DATABYTES + 4];
 uint8_t mimas_pwm[20];
 struct spi_ioc_transfer tr[13];
@@ -176,128 +181,25 @@ static void pabort(const char *s)
 	//abort();
 }
 
-static const char *device = "/dev/spidev0.0";
-static uint8_t mode;
-//static uint8_t bits = 8;
-static uint32_t speed = 40000000u;
-static uint16_t delay;
-
-int mimas_send_packet(int chan, uint8_t* data, int len)
-{
-    return(-5); // obsolete, not supported
-    if(fd == -1)return(-1);
-    if(chan>7)return(-3);
-    int ret;
-    data[0] = STREAM_PKT_SEND;
-    data[1] = 1<<chan;
-    data[2] = len/256;
-    data[3] = len%256;
-    tr[chan].tx_buf = (unsigned long)(void*)data;
-    tr[chan].len =4u + len;
-//printf("mimas Send pack at ch %u, len = %u\n",chan, len);
-    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[chan]);
-    if (ret < 1){
-    pabort("can't send spi message");
-    printf("tr[chan].le = %u\n", tr[chan].len );
-    return (-2);
-    }
-    /*
-    data[0] = 0x10;
-    data[1] = 1<<chan;
-    data[2] = len/256;
-    data[3] = len%256;
-    bcm2835_spi_writenb(&data[0],len+4);
-    */
-    return(0);
-}
-
-/*prepare and save data for messages to be sent to mimas in local buffer 'tr
-    chan is numeric ID of channel starting at 0.
-*/
-int mimas_store_packet(int chan, uint8_t* data, int len)
-{
-
-    if(fd == -1)return(-1);
-    if(chan > (MIMAS_STREAM_OUT_CNT-1))return(-3);
-    int ret;
-    uint16_t ch_bm =  1 << chan;
-    data[0] = STREAM_PKT_SEND;
-    data[1] = (ch_bm & 0xFF);
-    data[2] = ((ch_bm>>8) & 0x0F);
-    data[3] = (len &0xFF);
-    data[4] = (len>>8) & 0xFF;
-    data[5] = 0;
-    tr[chan].tx_buf = (unsigned long)(void*)data;
-    tr[chan].len = MIMAS_HDR_LEN + len;
-    return(0);
-}
-
-/*
-pwm API "mimas_store_pwm_val":
-Sets pwm values
-    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
-        and bit1 for access to second pwm group
-    chan is the channel select, and it works as channel id. Valid is 0 through 7.
-    val is a pointer to array of 16bit values to be assigned to channels starting from "chan" up to chan+cnt
-    cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
-*/
-
-int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt)
-{
-    if(chan>7)return(-3);
-    if(grp>3)return(-13);
-    if((cnt ==0)||(cnt>8)) return(-4);
-    if(fd == -1)return(-1);
-    int i, ret;
-
-    mimas_pwm[0] = PWM_VAL_ST;
-    mimas_pwm[1] = chan;
-    mimas_pwm[2] = grp;
-    mimas_pwm[3] = cnt;
-    if((chan+cnt)>8)
-    {
-        cnt = 8 - chan;
-    }
-    uint16_t* p = &mimas_pwm[4];
-    for(i=0;i<cnt;i++)
-    {
-        *p = *val;
-        p++;
-        val++;
-    }
-    tr_pwm.len = MIMAS_HDR_LEN + (2 * i);
-    if(spi_lock()!=0) return(-1000);
-    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
-    /*
-    unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
-    if(unlock_sleep==0llu)unlock_sleep=1llu;
-    bcm2835_delayMicroseconds(unlock_sleep);*/
-    spi_unlock();
-    if (ret < 1)
-    {
-        pabort("can't send spi message");
-        return (-5);
-    }
-    return(0);
-}
 
 /*
 pwm API "mimas_store_pwm_period":
-Sets pwm period for a group of pwms
+    Sets pwm period for a group of pwms
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
-        and bit1 for access to second pwm group
-    val is a 16bit value to be assigned to groups pwm period
+    and bit1 for access to second pwm group val is a 16bit value to be assigned to groups pwm period
 */
 int mimas_store_pwm_period(uint8_t grp, uint16_t val)
 {
     if(fd == -1)return(-1);
-    if(grp>3)return(-13);
+    if( (grp&3) == 0)return(-13);
     mimas_pwm[0] = PWM_PER_ST;
     mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp;
-    mimas_pwm[3] = 1;
-    *(uint16_t*)&mimas_pwm[4] = val;
-    tr_pwm.len = MIMAS_HDR_LEN;
+    mimas_pwm[2] = grp & 3;
+    mimas_pwm[3] = 0;
+    mimas_pwm[4] = 0;
+    mimas_pwm[5] = 0;
+    *(uint16_t*)&mimas_pwm[6] = val;
+    tr_pwm.len = MIMAS_HDR_LEN + 2u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -316,8 +218,7 @@ int mimas_store_pwm_period(uint8_t grp, uint16_t val)
 pwm API "mimas_store_pwm_div":
 Sets pwm frequency divider for a group of pwms
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
-        and bit1 for access to second pwm group
-    val is a 8bit value to be assigned to groups pwm frequency divider
+    and bit1 for access to second pwm group val is a 8bit value to be assigned to groups pwm frequency divider
 */
 int mimas_store_pwm_div(uint8_t grp, uint8_t val)
 {
@@ -325,10 +226,12 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
     if(grp>3)return(-13);
     mimas_pwm[0] = PWM_DIV_ST;
     mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp;
-    mimas_pwm[3] = 1;
-    mimas_pwm[4] = val;
-    tr_pwm.len = 1u  + MIMAS_HDR_LEN;
+    mimas_pwm[2] = grp & 3;
+    mimas_pwm[3] = 0;
+    mimas_pwm[4] = 0;
+    mimas_pwm[5] = 0;
+    mimas_pwm[6] = val;
+    tr_pwm.len = MIMAS_HDR_LEN + 1u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
@@ -342,37 +245,111 @@ int mimas_store_pwm_div(uint8_t grp, uint8_t val)
     return(0);
 }
 
+
+/*
+pwm API "mimas_store_pwm_gCntrol":
+Sets pwm group enable
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+    and bit1 for access to second pwm group. enabled controls enable flag for selected groups iin same bimap fashion
+*/
+int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
+{
+    if(fd == -1)return(-1);
+    if(grp > 3)return(-13);
+    mimas_pwm[0] = PWM_G_CTRL_ST;
+    mimas_pwm[1] = 0;
+    mimas_pwm[2] = grp & 3;
+    mimas_pwm[3] = 0;
+    mimas_pwm[4] = 0;
+    mimas_pwm[5] = 0;
+    mimas_pwm[6] = enabled & 1;
+    tr_pwm.len = MIMAS_HDR_LEN + 1u;
+    if(spi_lock()!=0) return(-1000);
+    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+
+   /* bcm2835_delayMicroseconds(1llu);*/
+    spi_unlock();
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+    return(0);
+}
+
+/*
+pwm API "mimas_store_pwm_val":
+Sets pwm values
+    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
+        and bit1 for access to second pwm group
+    chan is the channel select, and it works as channel id. Valid is 0 through 7.
+    val is a pointer to array of 16bit values to be assigned to channels starting from "chan" up to chan+cnt
+    cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
+*/
+
+int mimas_store_pwm_val( uint16_t chanBM, uint16_t* val)
+{
+    //if(chan>7)return(-3);
+    //if(grp>3)return(-13);
+    //if(cnt ==0) return(-4);
+    if(fd == -1)return(-1);
+    int i, ret;
+
+    mimas_pwm[0] = PWM_VAL_ST;
+    *(uint16_t*)&mimas_pwm[1] = chanBM;
+    mimas_pwm[3] = 32;
+    uint16_t* p = &mimas_pwm[6];
+    for(i=0;i<16;i++)
+    {
+        *p = *val;
+        p++;
+        val++;
+    }
+    tr_pwm.len = MIMAS_HDR_LEN + 32u;
+    if(spi_lock()!=0) return(-1000);
+    ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
+    /*
+    unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
+    if(unlock_sleep==0llu)unlock_sleep=1llu;
+    bcm2835_delayMicroseconds(unlock_sleep);*/
+    spi_unlock();
+    if (ret < 1)
+    {
+        pabort("can't send spi message");
+        return (-5);
+    }
+    return(0);
+}
 /*
 pwm API "mimas_store_pwm_chCntrol":
 Sets pwm enable and invert
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
-        and bit1 for access to second pwm group
-    chan is the channel select, and it works as channel id. Valid is 0 through 7.
+    and bit1 for access to second pwm group chan is the channel select, and it works as channel id. Valid is 0 through 7.
     enabled is a pointer to array of 8bit values to be assigned to channels starting from "chan" up to chan+cnt.
     in each byte bit0 controls enable flag and bit1 controls invert. Bit0  = 1 -> enable, Bit1 = 1 -> invert
     cnt tells how many channels to set starting from chan. this means that chan + cnt must be up to 8
 */
-int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt)
+int mimas_store_pwm_chCntrol(uint16_t chanBm, uint8_t* enabled)
 {
-    if(chan>7)return(-3);
-    if(grp>3)return(-13);
-    if((cnt ==0)||(cnt>8)) return(-4);
+    //if(chan>7)return(-3);
+    //if(grp>3)return(-13);
+    //if((cnt ==0)||(cnt>8)) return(-4);
     if(fd == -1)return(-1);
     int i, ret, j;
     mimas_pwm[0] = PWM_CH_CTRL_ST;
-    mimas_pwm[1] = chan;
-    mimas_pwm[2] = grp;
-    mimas_pwm[3] = cnt;
-    uint8_t* p = &mimas_pwm[4];
-    j = 0;
-    for(i=0;i<cnt;i++)
+    mimas_pwm[1] = chanBm & 0xFF;
+    mimas_pwm[2] = (chanBm>>8)&0xFF;
+    mimas_pwm[3] = 16;
+    mimas_pwm[4] = 0;
+    mimas_pwm[5] = 0;
+    uint8_t* p = &mimas_pwm[6];
+    for(i=0;i<16;i++)
     {
-        *p = enabled[i] &3;
+        *p = *enabled;
         p++;
-        j++;
-        if(i>7)break;
+        enabled++;
     }
-    tr_pwm.len = MIMAS_HDR_LEN + j;
+    tr_pwm.len = MIMAS_HDR_LEN + 16u;
     if(spi_lock()!=0) return(-1000);
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -387,32 +364,24 @@ int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_
     return(0);
 }
 
-/*
-pwm API "mimas_store_pwm_gCntrol":
-Sets pwm group enable
-    grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
-        and bit1 for access to second pwm group
-    enabled controls enable flag for selected groups
-*/int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
+/*prepare and save data for messages to be sent to mimas in local buffer 'tr
+    chan is numeric ID of channel starting at 0.
+*/
+int mimas_store_packet(int chan, uint8_t* data, int len, uint8_t cfg)
 {
-    if(fd == -1)return(-1);
-    if(grp > 3)return(-13);
-    mimas_pwm[0] = PWM_G_CTRL_ST;
-    mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp;
-    mimas_pwm[3] = 1;
-    mimas_pwm[4] = enabled & 1;
-    tr_pwm.len = 1u + MIMAS_HDR_LEN;
-    if(spi_lock()!=0) return(-1000);
-    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
-   /* bcm2835_delayMicroseconds(1llu);*/
-    spi_unlock();
-    if (ret < 1)
-    {
-        pabort("can't send spi message");
-        return (-5);
-    }
+    if(fd == -1)return(-1);
+    if(chan > (MIMAS_STREAM_OUT_CNT-1))return(-3);
+    int ret;
+    uint16_t ch_bm =  1 << chan;
+    data[0] = STREAM_PKT_SEND;
+    data[1] = (ch_bm & 0xFF);
+    data[2] = ((ch_bm>>8) & 0x0F);
+    data[3] = (len &0xFF);
+    data[4] = (len>>8) & 0xFF;
+    data[5] = cfg;
+    tr[chan].tx_buf = (unsigned long)(void*)data;
+    tr[chan].len = MIMAS_HDR_LEN + len;
     return(0);
 }
 
@@ -470,6 +439,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
 
         }
         if((start_bm & BIT32(i))==0)continue;
+
         if(tr[i].len>0)
         {
             ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[i]);
@@ -488,6 +458,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
             prnErr(log_mim,"WARNING: tr[%d] len = %d\n",i,tr[i].len);
         }
     }
+
     if(temp_bm!=start_bm)
     {
         prnErr(log_mim,"WARNING: spi : data_bm %x != start_bm %x\n", temp_bm, start_bm);

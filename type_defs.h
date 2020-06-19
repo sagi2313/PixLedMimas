@@ -144,7 +144,11 @@ typedef struct
 typedef struct
 {
     uint8_t mimas_header[6];
+    union{
     dmx_uni_out_t dmxp[UNI_PER_OUT];
+    uint8_t       raw_buf[UNI_PER_OUT * 512];
+    uint8_t       raw_unis[UNI_PER_OUT][512];
+    };
 }mimaspack_t;
 
 typedef struct

@@ -862,43 +862,27 @@ int setIP(char* newIP, int ifIdx)
 void mimas_all_black(out_def_t* outs)
 {
     int i;
-    /*
-    uint8_t dumm[UNI_PER_OUT * 512];
-    for(i=0;i<(UNI_PER_OUT * 512);i++)
-    {
-        dumm[i] = i%0x80;
-    }
+    int j;
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
-        if( MIMAS_STREAM_BM & (BIT32(i)) )
+
+        for(j=0;j< 2250;j++  )
         {
-            memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
-            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
+            if(j & 1)
+            {
+                outs[i].mpack.raw_buf[++j] = 10;
+                j++;
+            }
+            else
+            {
+                j++;
+                outs[i].mpack.raw_buf[++j] = 10;
+            }
         }
-    }
-    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0x555);
-    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
-    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
-    {
-        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
         if( MIMAS_STREAM_BM & (BIT32(i)) )
         {
-            memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
-            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
-        }
-    }
-    i = mimas_refresh_start_stream(MIMAS_STREAM_BM,0xAAA);
-    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
-    */
-    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
-    {
-        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
-        if( MIMAS_STREAM_BM & (BIT32(i)) )
-        {
-            //memcpy(&outs[i].mpack.dmxp[0], dumm,outs[i].mappedLen );
-            memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
-            mimas_store_packet(i,&outs[i].mpack, ( outs[i].mappedLen));
+            mimas_store_packet(i,&outs[i].mpack, 2250,0);
         }
     }
     uint32_t proto = 0;
