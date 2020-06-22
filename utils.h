@@ -151,7 +151,7 @@ int initMimasIntf(void* d);
 /*int mimas_send_packet(int chan, uint8_t* data, int len);*/
 /*int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm);*/
 int mimas_store_packet(int chan, uint8_t* data, int len, uint8_t cfg);
-
+int mimas_store_many_packets( uint16_t chan, uint8_t* data, int len, uint8_t cfg);
 int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm);
 //int mimas_store_pwm_val(uint8_t grp, uint8_t chan, uint16_t* val, uint8_t cnt);
 int mimas_store_pwm_val( uint16_t chanBM, uint16_t* val);

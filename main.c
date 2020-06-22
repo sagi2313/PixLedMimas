@@ -94,7 +94,7 @@ void make_a_dev(void)
     vd.pixel_count = 4500;
     vd.pix_per_uni = 150;
     vd.com.start_address = 27;
-    res =build_dev_ws(&vd);
+    //res =build_dev_ws(&vd);
 
     prnDev(res);
 }
@@ -118,10 +118,9 @@ void InitOuts(void)
         outs[i].dlen = 0;
         outs[i].fillMap = 0;
         outs[i].fullMap = 0;
-
+        pt = &outs[i].mpack.dmxp[0].dmx_data[0];
         for(j=0;j<UNI_PER_OUT;j++)
         {
-            pt = &outs[i].mpack.raw_unis[j][0];
             outs[i].wrPt[j] = pt;
             pt+=outs[i].uniLenLimit[j];
         }
@@ -1159,11 +1158,7 @@ int main(void)
     init_mimas_vdevs();
     InitOuts();
     initMimasIntf(NULL);
-int n;
-for(n=0;n<50;n++){
     mimas_all_black(&outs);
-    usleep(40000u);
-}
     usleep(100000);
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);

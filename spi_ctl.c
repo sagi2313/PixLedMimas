@@ -104,9 +104,9 @@ inline static int spi_lock(void)
         do
         {
             usleep((useconds_t)1);
-            mimas_prn_state(&mSt);
+            if((c  &  (BIT32(128u) -1u)) == (BIT32(128u) -1u) )mimas_prn_state(&mSt); // printf every 128 checks
             mSt = mimas_get_state();
-            mimas_prn_state(&mSt);
+            //mimas_prn_state(&mSt);
         }while((mSt.idle==1) && (++c<250000));
         if( mSt.idle == 1 )
         {
@@ -384,6 +384,33 @@ int mimas_store_packet(int chan, uint8_t* data, int len, uint8_t cfg)
     tr[chan].len = MIMAS_HDR_LEN + len;
     return(0);
 }
+
+
+int mimas_store_many_packets( uint16_t chan, uint8_t* data, int len, uint8_t cfg)
+{
+
+    if(fd == -1)return(-1);
+
+    int ret, i;
+    chan&= BIT16(MIMAS_STREAM_OUT_CNT) -1u;
+    if(chan == 0)return(-3);
+    data[0] = STREAM_PKT_SEND;
+    data[1] = (chan & 0xFF);
+    data[2] = ((chan>>8) & 0x0F);
+    data[3] = (len &0xFF);
+    data[4] = (len>>8) & 0xFF;
+    data[5] = cfg;
+    for(i=0;i<MIMAS_STREAM_OUT_CNT; i++)
+    {
+        if(BIT16(i) & chan){
+        tr[i].tx_buf = (unsigned long)(void*)data;
+        tr[i].len = MIMAS_HDR_LEN + len;
+        }
+    }
+
+    return(0);
+}
+
 
 int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
 {

@@ -863,10 +863,12 @@ void mimas_all_black(out_def_t* outs)
 {
     int i;
     int j;
+
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
         memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
-
+        // pattern blue/red
+        /*
         for(j=0;j< 2250;j++  )
         {
             if(j & 1)
@@ -879,12 +881,30 @@ void mimas_all_black(out_def_t* outs)
                 j++;
                 outs[i].mpack.raw_buf[++j] = 10;
             }
-        }
+        }*/
         if( MIMAS_STREAM_BM & (BIT32(i)) )
         {
             mimas_store_packet(i,&outs[i].mpack, 2250,0);
         }
     }
+    // 'single write"
+    /*
+    for(j=0;j< 2250;j++  )
+    {
+        if(j & 1)
+        {
+            outs[0].mpack.raw_buf[++j] = 10;
+            j++;
+        }
+        else
+        {
+            j++;
+            outs[0].mpack.raw_buf[++j] = 10;
+        }
+    }
+    mimas_store_many_packets( MIMAS_STREAM_BM, &outs[0].mpack, 2250,0);
+    */
+
     uint32_t proto = 0;
    // SET_PROTO(proto, STRM_WS, 0);
    // SET_PROTO(proto, STRM_SPI, 1);
