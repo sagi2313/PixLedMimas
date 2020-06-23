@@ -1158,6 +1158,13 @@ int main(void)
     init_mimas_vdevs();
     InitOuts();
     initMimasIntf(NULL);
+
+    int n;
+    for(n=0;n<20;n++)
+    {
+        mimas_test(&outs, 12, 3);
+        usleep(50000u);
+    }
     mimas_all_black(&outs);
     usleep(100000);
     socketStart(anetp->artnode, ARTNET_PORT);

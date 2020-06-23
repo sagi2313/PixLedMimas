@@ -39,7 +39,7 @@ int bits=8;
 
 static const char *device = "/dev/spidev0.0";
 static uint8_t mode;
-static uint32_t speed = 40000000u;
+static uint32_t speed = 80000000u;
 static uint16_t delay;
 //uint8_t mimas[8][DATABYTES + 4];
 uint8_t mimas_pwm[20];

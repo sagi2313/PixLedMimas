@@ -684,6 +684,7 @@ inline void mimas_reset(void)
     bcm2835_gpio_clr(MIMAS_RST);
     bcm2835_delayMicroseconds(10000ull);
     bcm2835_gpio_set(MIMAS_RST);
+    bcm2835_delayMicroseconds(10000ull);
 }
 #include <linux/wireless.h>
 int getifs(int sock, node_interfaces_t* ifss)
@@ -859,6 +860,7 @@ int setIP(char* newIP, int ifIdx)
     close(fd);
     return rc;
 }
+
 void mimas_all_black(out_def_t* outs)
 {
     int i;
@@ -911,6 +913,48 @@ void mimas_all_black(out_def_t* outs)
     i = mimas_refresh_start_stream(MIMAS_STREAM_BM,proto);
     if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
 }
+
+
+
+void mimas_test(out_def_t* outs, int byteCnt, uint16_t bm)
+{
+    int i;
+    int j;
+    if(byteCnt>2250)byteCnt = 2250;
+    for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
+    {
+        if((bm & BIT16(i)) == 0)continue;
+        memset(&outs[i].mpack, 0, sizeof(mimaspack_t));
+        // pattern blue/red
+
+        for(j=0;j< 2250;j++  )
+        {
+            if(j & 1)
+            {
+                outs[i].mpack.raw_buf[++j] = 10;
+                j++;
+            }
+            else
+            {
+                j++;
+                outs[i].mpack.raw_buf[++j] = 10;
+            }
+        }
+        if( MIMAS_STREAM_BM & (BIT32(i)) )
+        {
+            mimas_store_packet(i,&outs[i].mpack, byteCnt,0);
+        }
+    }
+
+
+    uint32_t proto = 0;
+   // SET_PROTO(proto, STRM_WS, 0);
+   // SET_PROTO(proto, STRM_SPI, 1);
+    i = mimas_refresh_start_stream(bm,proto);
+    if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
+}
+
+
 
 inline mimas_state_t mimas_get_state(void)
 {

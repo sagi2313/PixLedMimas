@@ -43,10 +43,11 @@
 
 #define MIMAS_RESET do{\
     bcm2835_gpio_set(MIMAS_RST); \
-    bcm2835_delayMicroseconds(10000ull);\
+    bcm2835_delayMicroseconds(500ull);\
     bcm2835_gpio_clr(MIMAS_RST); \
-    bcm2835_delayMicroseconds(10000ull); \
-    bcm2835_gpio_set(MIMAS_RST);}while(0);
+    bcm2835_delayMicroseconds(500ull); \
+    bcm2835_gpio_set(MIMAS_RST);}while(0); \
+    bcm2835_delayMicroseconds(1000ull);
 
 
 
@@ -205,6 +206,8 @@ typedef struct
     };
 }mimas_rq_msg_t;
 
+
+void mimas_test(out_def_t* outs, int byteCnt, uint16_t bm);
 
 void mimas_all_black(out_def_t*);
 mimas_state_t mimas_get_state(void);
