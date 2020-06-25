@@ -90,7 +90,7 @@ void make_a_dev(void)
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
     vd.com.start_address = 60;
-    res =build_dev_ws(&vd);
+    //res =build_dev_ws(&vd);
     vd.pixel_count = 1500;
     vd.pix_per_uni = 150;
     vd.com.start_address = 17;
@@ -129,7 +129,10 @@ void InitOuts(void)
 
 int sendOutToMimas(int oSel)
 {
-
+    int n =  (oSel + 2);
+    memcpy(outs[n].mpack.raw_buf, outs[oSel].mpack.raw_buf, outs[oSel].dlen);
+    outs[n].dlen = outs[oSel].dlen;
+    mimas_store_packet(n,(uint8_t*)&outs[n].mpack,outs[n].dlen, 0);
     return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen, 0));
 }
 
@@ -898,7 +901,10 @@ void *pix_handler(void* dat)
                         else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
                         mimas_start_bm|=BIT16(hwId);
                         SET_PROTO(mimas_proto_bm, STRM_WS, hwId);
-
+                        mimas_start_bm|=BIT16(hwId+2);
+                        //SET_PROTO(mimas_proto_bm, STRM_SPI, hwId+2);
+                        mimas_proto_bm&=~(3<< (2 *(hwId +2))  );
+                        mimas_proto_bm|=(STRM_SPI << (2 * (hwId + 2)));
                         if(sm->curr_map == sm->expected_full_map)
                         {
                             prnDbg(log_pix, "Full pix frame received\n");
@@ -1171,7 +1177,7 @@ int main(void)
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);
     art_set_node(anetp->artnode);
-    anetp->artnode->intLimit = 50;
+    anetp->artnode->intLimit = 60;
     SmReset(anetp->artnode,eResetInit);
 
     tasks[4].iniData = (void*)ev_pb;
@@ -1247,17 +1253,17 @@ void pmwHan(void* dat)
     pwm_d[0].gper = 59999u;
     for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
     {
-        pwm_d[0].ch_pers[k] = 30000u;//4375;
+        pwm_d[0].ch_pers[k] = 3400;//4375;
         pwm_d[0].ch_ctrls[k] = 1;
         pwm_d[0].sleep_time[k]  =  0;//PWM_SLEEP_TM;
         pwm_d[0].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_d[1].gctrl =1;
-    pwm_d[1].div = 2u;
+    pwm_d[1].div = 0u;
     pwm_d[1].gper = 0xFFFF;
     for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
     {
-        pwm_d[1].ch_pers[k] = 0x7FFF;//16384u;
+        pwm_d[1].ch_pers[k] = 14999u;//16384u;
         pwm_d[1].ch_ctrls[k] = 1;
         pwm_d[1].sleep_time[k]  =  0;//12* PWM_SLEEP_TM;
         pwm_d[1].sleep_count[k] =  PWM_SLEEP_TM;
@@ -1422,9 +1428,9 @@ void pmwHan(void* dat)
                 memcpy(&upd_ctrl[0], &pwm_d[0].ch_ctrls[0], 8 );
                 memcpy(&upd_ctrl[8], &pwm_d[1].ch_ctrls[0], 8 );
 
-                for(k=0;k<MIMAS_PWM_GROUP_CNT;k++)
-                {
-                    if(pwm_d[k].needUpdate)
+                //for(k=0;k<MIMAS_PWM_GROUP_CNT;k++)
+                //{
+                    if( (pwm_d[0].needUpdate) || (pwm_d[1].needUpdate))
                     {
                         do
                         {
@@ -1458,7 +1464,7 @@ void pmwHan(void* dat)
                         pwm_d[k].UpdChCount = 0;
                         pwm_d[k].needUpdate = 0;
                     }
-                }
+                //}
                 clock_gettime(CLOCK_REALTIME, &ts[2]);
                 break;
             }

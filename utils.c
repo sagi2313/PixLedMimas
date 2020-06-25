@@ -948,8 +948,8 @@ void mimas_test(out_def_t* outs, int byteCnt, uint16_t bm)
 
 
     uint32_t proto = 0;
-   // SET_PROTO(proto, STRM_WS, 0);
-   // SET_PROTO(proto, STRM_SPI, 1);
+    SET_PROTO(proto, STRM_WS, 1);
+    SET_PROTO(proto, STRM_SPI, 0);
     i = mimas_refresh_start_stream(bm,proto);
     if(i) prnErr(log_any,"mimas_all_black mimas error %d\n",i);
 }
