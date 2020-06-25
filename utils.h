@@ -158,12 +158,9 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm);
 int mimas_store_pwm_val( uint16_t chanBM, uint16_t* val);
 //int mimas_store_pwm_chCntrol(uint8_t grp, uint8_t chan, uint8_t* enabled, uint8_t cnt);
 int mimas_store_pwm_chCntrol(uint16_t chanBm, uint8_t *enabled);
-//int mimas_store_pwm_period(uint8_t grp, uint16_t val);
-int mimas_store_pwm_period(uint8_t grp, uint16_t val);
-//int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled);
-int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled);
-//int mimas_store_pwm_div(uint8_t grp, uint8_t val);
-int mimas_store_pwm_div(uint8_t grp, uint8_t val);
+int mimas_store_pwm_period(uint8_t grp, uint16_t valA, uint16_t valB);
+int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabledA, uint8_t enabledB);
+int mimas_store_pwm_div(uint8_t grp, uint8_t valA, uint8_t valB);
 
 typedef enum
 {

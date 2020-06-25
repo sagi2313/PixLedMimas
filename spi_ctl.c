@@ -42,7 +42,7 @@ static uint8_t mode;
 static uint32_t speed = 80000000u;
 static uint16_t delay;
 //uint8_t mimas[8][DATABYTES + 4];
-uint8_t mimas_pwm[20];
+uint8_t mimas_pwm[MIMAS_HDR_LEN + 32];
 struct spi_ioc_transfer tr[13];
 struct spi_ioc_transfer tr_pwm;
 static uint8_t start_stream_header[MIMAS_HDR_LEN];
@@ -59,7 +59,6 @@ void getSpinStats(uint64_t* tryCol, uint64_t* blocked, uint64_t* hits)
     *tryCol =spin_trycolission;
     *blocked = spin_blocks;
     *hits = spin_hit;
-
 }
 
 inline static int spi_lock(void)
@@ -188,18 +187,19 @@ pwm API "mimas_store_pwm_period":
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
     and bit1 for access to second pwm group val is a 16bit value to be assigned to groups pwm period
 */
-int mimas_store_pwm_period(uint8_t grp, uint16_t val)
+int mimas_store_pwm_period(uint8_t grp, uint16_t valA, uint16_t valB)
 {
     if(fd == -1)return(-1);
     if( (grp&3) == 0)return(-13);
     mimas_pwm[0] = PWM_PER_ST;
-    mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp & 3;
-    mimas_pwm[3] = 0;
+    mimas_pwm[1] = grp & 3;
+    mimas_pwm[2] = 0;
+    mimas_pwm[3] = 4; // 4 bytes 2 x 16bit period
     mimas_pwm[4] = 0;
     mimas_pwm[5] = 0;
-    *(uint16_t*)&mimas_pwm[6] = val;
-    tr_pwm.len = MIMAS_HDR_LEN + 2u;
+    *(uint16_t*)&mimas_pwm[6] = valA;
+    *(uint16_t*)&mimas_pwm[8] = valB;
+    tr_pwm.len = MIMAS_HDR_LEN + 4u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -220,18 +220,19 @@ Sets pwm frequency divider for a group of pwms
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
     and bit1 for access to second pwm group val is a 8bit value to be assigned to groups pwm frequency divider
 */
-int mimas_store_pwm_div(uint8_t grp, uint8_t val)
+int mimas_store_pwm_div(uint8_t grp, uint8_t valA, uint8_t valB)
 {
     if(fd == -1)return(-1);
     if(grp>3)return(-13);
     mimas_pwm[0] = PWM_DIV_ST;
-    mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp & 3;
-    mimas_pwm[3] = 0;
+    mimas_pwm[1] = grp & 3;
+    mimas_pwm[2] = 0;
+    mimas_pwm[3] = 2;
     mimas_pwm[4] = 0;
     mimas_pwm[5] = 0;
-    mimas_pwm[6] = val;
-    tr_pwm.len = MIMAS_HDR_LEN + 1u;
+    mimas_pwm[6] = valA;
+    mimas_pwm[7] = valB;
+    tr_pwm.len = MIMAS_HDR_LEN + 2u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
@@ -252,18 +253,19 @@ Sets pwm group enable
     grp is the group select, and it works as a bitmap. only bits 0 & 1 matter. set bit0 to true for access in first pwm group
     and bit1 for access to second pwm group. enabled controls enable flag for selected groups iin same bimap fashion
 */
-int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabled)
+int mimas_store_pwm_gCntrol(uint8_t grp, uint8_t enabledA, uint8_t enabledB)
 {
     if(fd == -1)return(-1);
     if(grp > 3)return(-13);
     mimas_pwm[0] = PWM_G_CTRL_ST;
-    mimas_pwm[1] = 0;
-    mimas_pwm[2] = grp & 3;
-    mimas_pwm[3] = 0;
+    mimas_pwm[1] = grp & 3;
+    mimas_pwm[2] = 0;
+    mimas_pwm[3] = 2;
     mimas_pwm[4] = 0;
     mimas_pwm[5] = 0;
-    mimas_pwm[6] = enabled & 1;
-    tr_pwm.len = MIMAS_HDR_LEN + 1u;
+    mimas_pwm[6] = enabledA & 1;
+    mimas_pwm[7] = enabledB & 1;
+    tr_pwm.len = MIMAS_HDR_LEN + 2u;
     if(spi_lock()!=0) return(-1000);
     int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
 
@@ -298,6 +300,8 @@ int mimas_store_pwm_val( uint16_t chanBM, uint16_t* val)
     mimas_pwm[0] = PWM_VAL_ST;
     *(uint16_t*)&mimas_pwm[1] = chanBM;
     mimas_pwm[3] = 32;
+    mimas_pwm[4] = 0;
+    mimas_pwm[5] = 0;
     uint16_t* p = &mimas_pwm[6];
     for(i=0;i<16;i++)
     {
@@ -335,7 +339,7 @@ int mimas_store_pwm_chCntrol(uint16_t chanBm, uint8_t* enabled)
     //if(grp>3)return(-13);
     //if((cnt ==0)||(cnt>8)) return(-4);
     if(fd == -1)return(-1);
-    int i, ret, j;
+    int i, ret;
     mimas_pwm[0] = PWM_CH_CTRL_ST;
     mimas_pwm[1] = chanBm & 0xFF;
     mimas_pwm[2] = (chanBm>>8)&0xFF;
@@ -345,7 +349,7 @@ int mimas_store_pwm_chCntrol(uint16_t chanBm, uint8_t* enabled)
     uint8_t* p = &mimas_pwm[6];
     for(i=0;i<16;i++)
     {
-        *p = *enabled;
+        *p = *enabled & 3;
         p++;
         enabled++;
     }
@@ -567,7 +571,7 @@ int initSPI(void)
 	if (ret == -1)
 		pabort("can't get max speed hz");
 	printf("Max RD speed %u\n",speed);
-
+    prnFinf(log_mim,"SPI dev opened fd: %d\n",fd);
 	printf("spi mode: %d\n", mode);
 	printf("bits per word: %d\n", bits);
 	printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);

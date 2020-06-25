@@ -306,6 +306,7 @@ typedef struct
     uint16_t        gper;
     uint16_t        ch_pers[MIMAS_PWM_OUT_PER_GRP_CNT];
     uint8_t         ch_ctrls[MIMAS_PWM_OUT_PER_GRP_CNT];
+    uint8_t         valid_ch_bm;
     uint32_t         sleep_time[MIMAS_PWM_OUT_PER_GRP_CNT];
     uint32_t         sleep_count[MIMAS_PWM_OUT_PER_GRP_CNT];
 }pwm_group_data_t;

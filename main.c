@@ -86,15 +86,15 @@ void make_a_dev(void)
     res = build_dev_pwm(&pdev, &cfg);
 
     ws_pix_vdev_t   vd;
-    vd.pixel_count = 1500;
+    vd.pixel_count = 6000;
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
+    vd.com.start_address = 60;
+    res =build_dev_ws(&vd);
+    vd.pixel_count = 1500;
+    vd.pix_per_uni = 150;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    vd.pixel_count = 4500;
-    vd.pix_per_uni = 150;
-    vd.com.start_address = 27;
-    //res =build_dev_ws(&vd);
 
     prnDev(res);
 }
@@ -1166,6 +1166,7 @@ int main(void)
         usleep(50000u);
     }
     mimas_all_black(&outs);
+    MIMAS_RESET
     usleep(100000);
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);
@@ -1246,9 +1247,9 @@ void pmwHan(void* dat)
     pwm_d[0].gper = 59999u;
     for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
     {
-        pwm_d[0].ch_pers[k] = 4375;
+        pwm_d[0].ch_pers[k] = 30000u;//4375;
         pwm_d[0].ch_ctrls[k] = 1;
-        pwm_d[0].sleep_time[k]  =  PWM_SLEEP_TM;
+        pwm_d[0].sleep_time[k]  =  0;//PWM_SLEEP_TM;
         pwm_d[0].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_d[1].gctrl =1;
@@ -1256,9 +1257,9 @@ void pmwHan(void* dat)
     pwm_d[1].gper = 0xFFFF;
     for(k=0;k<MIMAS_PWM_OUT_PER_GRP_CNT;k++)
     {
-        pwm_d[1].ch_pers[k] = 16384u;
+        pwm_d[1].ch_pers[k] = 0x7FFF;//16384u;
         pwm_d[1].ch_ctrls[k] = 1;
-        pwm_d[1].sleep_time[k]  =  12* PWM_SLEEP_TM;
+        pwm_d[1].sleep_time[k]  =  0;//12* PWM_SLEEP_TM;
         pwm_d[1].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_msg.mtyp = msg_typ_pwm_cmd;
@@ -1270,7 +1271,7 @@ void pmwHan(void* dat)
     pwm_msg.ch_count[1] = MIMAS_PWM_OUT_PER_GRP_CNT;
     pwm_msg.data[0] = pwm_d[0];
     pwm_msg.data[1] = pwm_d[1];
-   // post_msg(&pb->rq,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
+    post_msg(&pb->rq,(void*)&pwm_msg,sizeof(pwm_cmd_msg_t));
 
     int rc;
     struct timespec ts[4];
@@ -1569,68 +1570,76 @@ void pmwHan(void* dat)
                 if(msg->cmd & pwm_set_gper_cmd)
                 {
                     if(msg->grp_bm & PWM_GRP_A) {
-               //         mrc = mimas_store_pwm_period(PWM_GRP_A, msg->data[0].gper);
-               //         hpwm[0].gperiod = msg->data[0].gper;
-               //         if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_period(PWM_GRP_A, msg->data[0].gper, 0);
+                        hpwm[0].gperiod = msg->data[0].gper;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                     if(msg->grp_bm & PWM_GRP_B) {
-                //        mrc = mimas_store_pwm_period(PWM_GRP_B, msg->data[1].gper);
-                //        hpwm[1].gperiod = msg->data[1].gper;
-                //        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_period(PWM_GRP_B, 0, msg->data[1].gper);
+                        hpwm[1].gperiod = msg->data[1].gper;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                 }
                 if(msg->cmd & pwm_set_div_cmd)
                 {
                     if(msg->grp_bm & PWM_GRP_A) {;
-                //        mrc = mimas_store_pwm_div(PWM_GRP_A, msg->data[0].div);
-                //        hpwm[0].div = msg->data[0].div;
-                //        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_div(PWM_GRP_A, msg->data[0].div,0);
+                        hpwm[0].div = msg->data[0].div;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                     if(msg->grp_bm & PWM_GRP_B) {
-                //        mrc = mimas_store_pwm_div(PWM_GRP_B, msg->data[1].div);
-                //        hpwm[1].div = msg->data[1].div;
-                //        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_div(PWM_GRP_B, 0,msg->data[1].div);
+                        hpwm[1].div = msg->data[1].div;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                 }
                 if(msg->cmd & pwm_set_gctrl_cmd)
                 {
                     if(msg->grp_bm & PWM_GRP_A) {
-             //           mrc = mimas_store_pwm_gCntrol(PWM_GRP_A, msg->data[0].gctrl);
-             //           hpwm[0].gEnable = msg->data[0].gctrl;
-              //          if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_A, msg->data[0].gctrl,0);
+                        hpwm[0].gEnable = msg->data[0].gctrl;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                     if(msg->grp_bm & PWM_GRP_B) {
-              //          mrc = mimas_store_pwm_gCntrol(PWM_GRP_B, msg->data[1].gctrl);
-              //         hpwm[1].gEnable = msg->data[1].gctrl;
-              //          if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        mrc = mimas_store_pwm_gCntrol(PWM_GRP_B, 0, msg->data[1].gctrl);
+                       hpwm[1].gEnable = msg->data[1].gctrl;
+                        if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                     }
                 }
                 if(msg->cmd & pwm_set_ch_per_cmd)
                 {
+                    uint16_t pers[16]={0};
+                    uint16_t vbm=0;
+
+
                     if(msg->grp_bm & PWM_GRP_A) {
-                  //      mrc = mimas_store_pwm_val(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_pers[msg->start_ch[0]],msg->ch_count[0]);
-                        // need update hwpwm
-                  //      if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        //mrc = mimas_store_pwm_val(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_pers[msg->start_ch[0]]);
+                        memcpy(pers, msg->data[0].ch_pers,16);
+                        //need update hwpwm
+                        vbm = 0xff;
                         }
                     if(msg->grp_bm & PWM_GRP_B) {
-                      //  mrc = mimas_store_pwm_val(PWM_GRP_B, msg->start_ch[1],&msg->data[1].ch_pers[msg->start_ch[1]],msg->ch_count[1]);
-                        // need update hwpwm
-                      //  if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+
+                        memcpy(&pers[8], msg->data[1].ch_pers,16);
+                        vbm|=0xff00;
                     }
+                    mrc = mimas_store_pwm_val(vbm, pers);
+                    if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                 }
                 if(msg->cmd & pwm_set_ch_ctrl_cmd)
                 {
+                    uint8_t ctrls[16]={0};
+                    uint16_t vbm=0;
                     if(msg->grp_bm & PWM_GRP_A) {
-                        //mrc = mimas_store_pwm_chCntrol(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_ctrls[msg->start_ch[0]],msg->ch_count[0]);
-                  //      mrc = mimas_store_pwm_chCntrol(PWM_GRP_A, msg->start_ch[0],&msg->data[0].ch_ctrls[msg->start_ch[0]],msg->ch_count[0]);
-                        // need update hwpwm
-                 //       if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        vbm =0xff;
+                        memcpy(ctrls,msg->data[0].ch_ctrls,8);
                     }
                     if(msg->grp_bm & PWM_GRP_B) {
-                 //       mrc = mimas_store_pwm_chCntrol(PWM_GRP_B, msg->start_ch[1],&msg->data[1].ch_ctrls[msg->start_ch[1]],msg->ch_count[1]);
-                        // need update hwpwm
-                  //      if(mrc) printf("mimas_send_err in %d\n", __LINE__);
+                        vbm |=0xff00;
+                        memcpy(&ctrls[8],msg->data[1].ch_ctrls,8);
                     }
+                    mrc = mimas_store_pwm_chCntrol(vbm, ctrls);
+                    if(mrc) printf("mimas_send_err in %d\n", __LINE__);
                 }
                 break;
             }
