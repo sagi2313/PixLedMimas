@@ -6,8 +6,8 @@
 /* PIN connections */
 #define MIMAS_RST       18 /*GPIO18 */
 #define MIMAS_CLK_RDY   17 /*GPIO17 */
-#define MIMAS_SYS_RDY   27 /*GPIO27 */
-#define MIMAS_IDLE      22 /*GPIO22 */
+#define MIMAS_SYS_RDY   22 /*GPIO27 */
+#define MIMAS_IDLE      27 /*GPIO22 */
 
 /* Streamer definitions */
 #define MIMAS_STREAM_OUT_CNT        (12)
@@ -23,7 +23,7 @@
 #define PWM_GRP_B       2
 #define PWM_GRP_ALL     (PWM_GRP_A | PWM_GRP_B)
 
-#define STRM_WS         0x0
+#define STRM_WS          0x0
 #define STRM_SPI         0x1
 #define STRM_DMX         0x2
 #define STRM_CLR         0x3

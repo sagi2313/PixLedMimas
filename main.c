@@ -118,6 +118,8 @@ void InitOuts(void)
         outs[i].dlen = 0;
         outs[i].fillMap = 0;
         outs[i].fullMap = 0;
+        outs[i].cfg = 0;
+        outs[i].proto = stream_proto_nrz_e;
         pt = &outs[i].mpack.dmxp[0].dmx_data[0];
         for(j=0;j<UNI_PER_OUT;j++)
         {
@@ -125,15 +127,21 @@ void InitOuts(void)
             pt+=outs[i].uniLenLimit[j];
         }
     }
+    outs[2].colMap = rgb_map_e;
+    outs[3].colMap = rgb_map_e;
+    outs[2].cfg = 0xC3;
+    outs[3].cfg = 0xC3;
+    outs[2].proto = stream_proto_spi_e;
+    outs[3].proto = stream_proto_spi_e;
 }
 
 int sendOutToMimas(int oSel)
 {
-    int n =  (oSel + 2);
-    memcpy(outs[n].mpack.raw_buf, outs[oSel].mpack.raw_buf, outs[oSel].dlen);
-    outs[n].dlen = outs[oSel].dlen;
-    mimas_store_packet(n,(uint8_t*)&outs[n].mpack,outs[n].dlen, 0);
-    return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen, 0));
+    //int n =  (oSel + 2);
+    //memcpy(outs[n].mpack.raw_buf, outs[oSel].mpack.raw_buf, outs[oSel].dlen);
+    //outs[n].dlen = outs[oSel].dlen;
+    //mimas_store_packet(n,(uint8_t*)&outs[n].mpack,outs[n].dlen, 0x61);
+    return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen,  outs[oSel].cfg));
 }
 
 
@@ -821,7 +829,10 @@ void *pix_handler(void* dat)
                         pixDev->com.vdsm.curr_map = 0;
                         outs[pixDev->out_start_id].fillMap = 0;
                         outs[pixDev->out_start_id].dlen = 0;
-                        mimas_start_bm&=~(BIT16(pixDev->out_start_id));
+                        outs[pixDev->out_start_id+2].fillMap = 0;
+                        outs[pixDev->out_start_id+2].dlen = 0;
+                        //mimas_start_bm&=~(BIT16(pixDev->out_start_id));
+                        mimas_start_bm = 0;
                         //SET_PROTO(mimas_proto_bm,STRM_WS,pixDev->out_start_id);
                         mimas_proto_bm=0;
                     }
@@ -885,8 +896,10 @@ void *pix_handler(void* dat)
                                 pixDev->com.vdsm.curr_map|= BIT64(relAddr);
                                 sm->curr_map|= BIT64(relAddr) << (j * UNI_PER_OUT);
                                 outs[hwId].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
+                                outs[hwId+2].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
                             }
                             mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
+                            mapColor(&ap->ArtDmxOut.dmx,&outs[hwId+2],relAddr);
                             break;
                         }
                     }
@@ -897,6 +910,7 @@ void *pix_handler(void* dat)
                     if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
                     {
                         i = sendOutToMimas(hwId);
+                        i += sendOutToMimas(hwId+2);
                         if(i) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, i);}
                         else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, i);}
                         mimas_start_bm|=BIT16(hwId);
@@ -1177,7 +1191,7 @@ int main(void)
     socketStart(anetp->artnode, ARTNET_PORT);
     NodeInit(anetp, (64), 0x11);
     art_set_node(anetp->artnode);
-    anetp->artnode->intLimit = 60;
+    anetp->artnode->intLimit = 100;
     SmReset(anetp->artnode,eResetInit);
 
     tasks[4].iniData = (void*)ev_pb;
@@ -1255,7 +1269,7 @@ void pmwHan(void* dat)
     {
         pwm_d[0].ch_pers[k] = 3400;//4375;
         pwm_d[0].ch_ctrls[k] = 1;
-        pwm_d[0].sleep_time[k]  =  0;//PWM_SLEEP_TM;
+        pwm_d[0].sleep_time[k]  =  PWM_SLEEP_TM;
         pwm_d[0].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_d[1].gctrl =1;
@@ -1265,7 +1279,7 @@ void pmwHan(void* dat)
     {
         pwm_d[1].ch_pers[k] = 14999u;//16384u;
         pwm_d[1].ch_ctrls[k] = 1;
-        pwm_d[1].sleep_time[k]  =  0;//12* PWM_SLEEP_TM;
+        pwm_d[1].sleep_time[k]  =  12* PWM_SLEEP_TM;
         pwm_d[1].sleep_count[k] =  PWM_SLEEP_TM;
     }
     pwm_msg.mtyp = msg_typ_pwm_cmd;

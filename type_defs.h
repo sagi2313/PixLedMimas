@@ -48,7 +48,11 @@
 #define BIT8(B)  ( (uint8_t)( ((uint32_t)1U)<<((uint32_t)(B)) )  & 0xFF)
 #endif
 
-
+typedef enum
+{
+    stream_proto_nrz_e,
+    stream_proto_spi_e
+}stream_proto_type_e;
 
 typedef enum
 {
@@ -150,17 +154,19 @@ typedef struct
     uint8_t       raw_unis[UNI_PER_OUT][512];
     };
 }mimaspack_t;
-
+typedef uint8_t stream_cfg_t;
 typedef struct
 {
-    uint8_t         *wrPt[UNI_PER_OUT];
-    uint16_t        uniLenLimit[UNI_PER_OUT]; // limit of bytes to use per universe, set by config
-    uint16_t        dlen;        // current total length of pixel data written in outBuffer
-    uint16_t        mappedLen;   //
-    uint8_t         fillMap;
-    uint8_t         fullMap;
-    color_mapping_e colMap;
-    mimaspack_t     mpack;
+    uint8_t             *wrPt[UNI_PER_OUT];
+    uint16_t            uniLenLimit[UNI_PER_OUT]; // limit of bytes to use per universe, set by config
+    uint16_t            dlen;        // current total length of pixel data written in outBuffer
+    uint16_t            mappedLen;   //
+    uint8_t             fillMap;
+    uint8_t             fullMap;
+    color_mapping_e     colMap;
+    stream_proto_type_e proto;
+    stream_cfg_t        cfg;
+    mimaspack_t         mpack;
 }out_def_t;
 #pragma pack()
 typedef struct
