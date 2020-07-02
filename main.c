@@ -118,7 +118,7 @@ void InitOuts(void)
         outs[i].dlen = 0;
         outs[i].fillMap = 0;
         outs[i].fullMap = 0;
-        outs[i].cfg = 0;
+        outs[i].cfg.raw = 0;
         outs[i].proto = stream_proto_nrz_e;
         pt = &outs[i].mpack.dmxp[0].dmx_data[0];
         for(j=0;j<UNI_PER_OUT;j++)
@@ -129,8 +129,8 @@ void InitOuts(void)
     }
     outs[2].colMap = rgb_map_e;
     outs[3].colMap = rgb_map_e;
-    outs[2].cfg = 0xC3;
-    outs[3].cfg = 0xC3;
+    outs[2].cfg.raw = 0xC3;
+    outs[3].cfg.raw = 0xC3;
     outs[2].proto = stream_proto_spi_e;
     outs[3].proto = stream_proto_spi_e;
 }
@@ -141,28 +141,20 @@ int sendOutToMimas(int oSel)
     //memcpy(outs[n].mpack.raw_buf, outs[oSel].mpack.raw_buf, outs[oSel].dlen);
     //outs[n].dlen = outs[oSel].dlen;
     //mimas_store_packet(n,(uint8_t*)&outs[n].mpack,outs[n].dlen, 0x61);
-    return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen,  outs[oSel].cfg));
+    return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen,  outs[oSel].cfg.raw));
 }
 
 
 
-void  consumeList(peer_pack_t*         pkt)
+void  consumeList(peer_pack_t* pkt)
 {
-    //setHandler(fault_handler);
     static int          sconInit=0;
-    uint8_t             check_unis;
+    static uint8_t      check_unis = 0;
     static int          devIdx[MAX_VDEV_CNT] ,devCnt;
     int                 i, rc, ticks_to_sleep;
     uint32_t            popcnt=0;
     peer_pack_t         ppack;
-    //peer_pack_t*         pkt =  &ppack;
     uint64_t            peer_id;
-    //task_cfg_t*         tcfg = (task_cfg_t*)dat;
-    //app_node_t*         artn = (app_node_t*)tcfg->iniData;
-
-    //post_box_t*         pb = artn->artPB;
-    //node_t*             me = artn->artnode;
-
     static node_branch_t       branches[5];
     static node_branch_t*      pwmBr;
     static node_branch_t*      pixBr;
@@ -177,18 +169,15 @@ void  consumeList(peer_pack_t*         pkt)
     peer_pack_t*        pp;
     art_resp_e          art_res;
     gen_addres_u        raw_addr;
-
     mimas_out_dev_t*            cdev;
     static trace_msg_t*        trms[5];
     static struct timespec     ts_now;
     long                        elapsed;
-
     timeloop=0;
     timesum =0;
     timesum_mimas=0;
     timesum_proc=0;
     static trace_msg_t trm[5];
-
 
     if(sconInit==0)
     {
@@ -207,240 +196,224 @@ void  consumeList(peer_pack_t*         pkt)
         trms[2]=&trm[2];
         trms[3]=&trm[3];
         trms[4]=&trm[4];
-        check_unis = 0;
         ticks_to_sleep = 6;
         sconInit = 1;
     }
 
-
-
-    //threadConfig(tcfg, log_con);
     t1 = clock();
     clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
-   // while(1)
-   // {
-        cdev = NULL;
-        memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
-        do
+
+    cdev = NULL;
+    memset((void*)branches, 0, (sizeof(node_branch_t)* 5));
+    do
+    {
+        if(pkt == NULL)
         {
-            //pkt = getMsg(&sock_pb->rq);
-            if(pkt == NULL)
+            if(ticks_to_sleep<5)ticks_to_sleep++;
+            if(ticks_to_sleep == 5)
             {
-                if(ticks_to_sleep<5)ticks_to_sleep++;
-                if(ticks_to_sleep == 5)
+                clock_gettime(CLOCK_REALTIME, &ts_now);
+                elapsed = nsec_diff(&ts_now, &trms[0]->ts);
+                if(elapsed > CONS_TOV)
                 {
-                    clock_gettime(CLOCK_REALTIME, &ts_now);
-                    elapsed = nsec_diff(&ts_now, &trms[0]->ts);
-                    if(elapsed > CONS_TOV)
-                    {
-                        clearBM(devList.tmp_uni_map);
-                        clearBM(devList.glo_uni_map);
-                        check_unis=0;
-                        ticks_to_sleep++;
-                        trms[0]->ts = ts_now;
-                        prnFinf(log_con, "Elapsed ovf : %ld nsec\npktPb lowMark = %d\n", elapsed, pkt_pb->ll.pile.low_mark );
-                        pkt_pb->ll.pile.low_mark=pkt_pb->ll.pile.maxCount+1;
-                    }
-                    //usleep(5);
+                    clearBM(devList.tmp_uni_map);
+                    clearBM(devList.glo_uni_map);
+                    check_unis=0;
+                    ticks_to_sleep++;
+                    trms[0]->ts = ts_now;
+                    prnFinf(log_con, "Elapsed ovf : %ld nsec\npktPb lowMark = %d\n", elapsed, pkt_pb->ll.pile.low_mark );
+                    pkt_pb->ll.pile.low_mark=pkt_pb->ll.pile.maxCount+1;
                 }
-                //pthread_yield();
-            }
-        }while(pkt == NULL);
-        clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
-        ticks_to_sleep = 0;
-        switch(pkt->genmtyp)
-        {
-            case msg_typ_socket_data:
-            {
-                //msgRead(&sock_pb->rq);
-                printf("Unexpected msg\n");
-                return;
-                break;
-            }
-            case msg_typ_socket_ntfy:
-            {
-                trms[0]->msg_cnt = popcnt++;
-                post_msg(&ev_pb->rq, trms[0],sizeof(trace_msg_t));
-                nodes = pkt->dataNtfy.datapt;
-                pb_owner = pkt->dataNtfy.rq_owner;
-                //prnLLdetail(nodes, "CONS", "ConsRcved");
-                //msgRead(&sock_pb->rq);
-                break;
-            }
-            case msg_typ_sys_event:
-            {
-                switch(pkt->sys_ev.ev_type)
-                {
-                    case sys_ev_socket_timeout:
-                    {
-                        printf("Socket TimeOut received on sock %d\n", pkt->sys_ev.data1);
-                        break;
-                    }
-                    default:
-                    {
-                        printf("Socket event %d received on sock %d\n", (uint32_t)pkt->sys_ev.ev_type, pkt->sys_ev.data1);
-                        break;
-                    }
-                }
-                //msgRead(&sock_pb->rq);
-                return;
-                break;
-            }
-            default:
-            {
-                printf("Unknown msgType received : %u\n", (uint32_t)pkt->genmtyp);
-                //msgRead(&sock_pb->rq);
-                return;
-                break;
             }
         }
-        cn = nodes;
-        sock_data_msg_t* dt;
-        int nodecnt = 0;
-        if(check_unis && (devList.glo_uni_map->reserved < check_unis) )
+    }while(pkt == NULL);
+    clock_gettime(CLOCK_REALTIME, &trms[0]->ts);
+    ticks_to_sleep = 0;
+    switch(pkt->genmtyp)
+    {
+        case msg_typ_socket_data:
         {
-            if(devList.glo_uni_map->reserved>devList.tmp_uni_map->reserved)
-            {
-                prn(log_finf,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
-                bm_t* bm = devList.glo_uni_map;
-                devList.glo_uni_map = devList.tmp_uni_map ;
-                devList.tmp_uni_map = bm;
-
-            }
-            clearBM(devList.tmp_uni_map);
-            check_unis=0;
+            printf("Unexpected msg\n");
+            return;
+            break;
         }
-        taken_e taken;
-        while(cn)
+        case msg_typ_socket_ntfy:
         {
-            nodecnt++;
-            dt = cn->item.pl.msg;
-            peer_id = (*(uint64_t*)&dt->sender);
-            ap =  &dt->pl.art;
-            art_res = ArtNetDecode(ap);
-            switch(art_res)
+            trms[0]->msg_cnt = popcnt++;
+            post_msg(&ev_pb->rq, trms[0],sizeof(trace_msg_t));
+            nodes = pkt->dataNtfy.datapt;
+            pb_owner = pkt->dataNtfy.rq_owner;
+            break;
+        }
+        case msg_typ_sys_event:
+        {
+            switch(pkt->sys_ev.ev_type)
             {
-                case art_data_e:
+                case sys_ev_socket_timeout:
                 {
-                    raw_addr.anet = ap->ArtDmxOut.a_net;
-                    check_unis++;
-                    taken = updateBM(devList.tmp_uni_map,bm_reserved_e,raw_addr.addr);
-                    if(taken == bm_free_e)
-                    {
-                        check_unis=0;
-                        prnDbg(log_con,"Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
-                    }
-                    if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
-                    {
-                        taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
-                        if(taken == bm_free_e)
-                        {
-                            prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
-                            prnFinf(log_con,"Added uni %d to global,Receiving %u universes\n",raw_addr.addr, devList.glo_uni_map->reserved);
-                        }
-                    }
-
-                    devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
-
-                    if(devCnt <1)
-                    {
-                        addToBranch(dropBr,cn);
-                        cn = cn->nxt;
-                        continue;
-                    }
-                    vdevs_e devdstinct = unused_dev;
-                    for(i=0;i<devCnt;i++)
-                    {
-                         cdev = &devList.devs[devIdx[i]];
-                         vDevSetPeer(peer_id, devIdx[i]);
-
-                        if (cdev==NULL) continue;
-                        if( devdstinct & GET_VDEV_TYPE(*cdev))continue; // just get distinct devices for this pkt/address
-                        switch(GET_VDEV_TYPE(*cdev))
-                        {
-                            case ws_pix_dev:
-                            {
-                                cn->item.pl.vDevId = devIdx[i];
-                                addToBranch(pixBr,cn);
-                                devdstinct|=ws_pix_dev;
-                                break;
-                            }
-                            case pwm_dev:
-                            {
-                                cn->item.pl.vDevId = devIdx[i];
-                                addToBranch(pwmBr,cn);
-                                devdstinct|=pwm_dev;
-                                break;
-                            }
-                            default:
-                            {
-                                prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
-                                break;
-                            }
-                        } // end of switch devType
-                    }   // end of devices loop
-                    break;
-                } // end of art_res switch
-                case art_poll_e:
-                {
-                        addToBranch(localBr, cn);
-                        break;
-                }
-                case art_syn_pack_e:
-                {
-                    prnErr(log_con, "A SYNC!!!!\n");
-                    addToBranch(dropBr,cn);
+                    printf("Socket TimeOut received on sock %d\n", pkt->sys_ev.data1);
                     break;
                 }
                 default:
                 {
-                    prnErr(log_con,"\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
-                    addToBranch(dropBr,cn);
-                    //putNode(cn->pb, cn, &cnn);
-                    //cn = cnn;
+                    printf("Socket event %d received on sock %d\n", (uint32_t)pkt->sys_ev.ev_type, pkt->sys_ev.data1);
+                    break;
                 }
             }
-            cn = cn->nxt;
-        } // end of cn loop
-        prnDbg(log_con,"Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
+            return;
+            break;
+        }
+        default:
+        {
+            printf("Unknown msgType received : %u\n", (uint32_t)pkt->genmtyp);
+            return;
+            break;
+        }
+    }
+    cn = nodes;
+    sock_data_msg_t* dt;
+    int nodecnt = 0;
+    if(check_unis && (devList.glo_uni_map->reserved < check_unis) )
+    {
+        if(devList.glo_uni_map->reserved > devList.tmp_uni_map->reserved)
+        {
+            prn(log_finf,log_con,"Uni decreased from %u to %u\n",devList.glo_uni_map->reserved, devList.tmp_uni_map->reserved);
+            bm_t* bm = devList.glo_uni_map;
+            devList.glo_uni_map = devList.tmp_uni_map ;
+            devList.tmp_uni_map = bm;
 
-        if(pwmBr->hd)
-        {
-            sockdat_ntfy_t pwmmsg;
-            pwmmsg.mtyp = msg_typ_socket_ntfy;
-            pwmmsg.rq_owner = pwmBr->hd->pb;
-            pwmmsg.datapt = pwmBr->hd;
-            pwmBr->lst->nxt  = NULL;
-            prnLLdetail(pwmBr->hd, "CONS", "PwmLL");
-            post_msg(&pwm_pb->rq,&pwmmsg,sizeof(sockdat_ntfy_t));
         }
-        if(pixBr->hd)
+        clearBM(devList.tmp_uni_map);
+        check_unis=0;
+    }
+    taken_e taken;
+    while(cn)
+    {
+        nodecnt++;
+        dt = cn->item.pl.msg;
+        peer_id = (*(uint64_t*)&dt->sender);
+        ap =  &dt->pl.art;
+        art_res = ArtNetDecode(ap);
+        switch(art_res)
         {
-            sockdat_ntfy_t pixmsg;
-            pixmsg.mtyp = msg_typ_socket_ntfy;
-            pixmsg.rq_owner = pixBr->hd->pb;
-            pixmsg.datapt = pixBr->hd;
-            pixBr->lst->nxt  = NULL;
-            prnLLdetail(pixBr->hd, "CONS", "PixLL");
-            post_msg(&pix_pb->rq,&pixmsg,sizeof(sockdat_ntfy_t));
-            prnDbg(log_con,"Sending pix Pkt to handler\n");
-        }
-        if(dropBr->hd)
-        {
-            dropBr->lst->nxt  = NULL;
-            prnLLdetail(dropBr->hd, "DROPS", "Drops");
-            i = putNodes(dropBr->hd->pb, dropBr->hd);
-            prnDbg(log_con,"Dropped %d unamapped Pkts\n",i);
-        }
-        if(localBr->hd)
-        {
-            localBr->lst->nxt = NULL;
-            make_artnet_resp(localBr->hd->item.pl.msg);
-            i = putNodes(localBr->hd->pb, localBr->hd);
-        }
+            case art_data_e:
+            {
+                raw_addr.anet = ap->ArtDmxOut.a_net;
+                check_unis++;
+                taken = updateBM(devList.tmp_uni_map,bm_reserved_e,raw_addr.addr);
+                if(taken == bm_free_e)
+                {
+                    check_unis=0;
+                    prnDbg(log_con,"Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
+                }
+                if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
+                {
+                    taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
+                    if(taken == bm_free_e)
+                    {
+                        prnDbg(log_con,"Added uni %d to glo, rez = %u\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                        prnFinf(log_con,"Added uni %d to global,Receiving %u universes\n",raw_addr.addr, devList.glo_uni_map->reserved);
+                    }
+                }
 
-   // }
-        //printf("Cons: got msg, artres = %u, uni = %u\n", art_res, ap->ArtDmxOut.a_net.SubUni.subuni_full)
+                devCnt = findVDevsAtAddr(raw_addr.addr, devIdx);
+
+                if(devCnt <1)
+                {
+                    addToBranch(dropBr,cn);
+                    cn = cn->nxt;
+                    continue;
+                }
+                vdevs_e devdstinct = unused_dev;
+                for(i=0;i<devCnt;i++)
+                {
+                     cdev = &devList.devs[devIdx[i]];
+                     vDevSetPeer(peer_id, devIdx[i]);
+
+                    if (cdev==NULL) continue;
+                    if( devdstinct & GET_VDEV_TYPE(*cdev))continue; // just get distinct devices for this pkt/address
+                    switch(GET_VDEV_TYPE(*cdev))
+                    {
+                        case ws_pix_dev:
+                        {
+                            cn->item.pl.vDevId = devIdx[i];
+                            addToBranch(pixBr,cn);
+                            devdstinct|=ws_pix_dev;
+                            break;
+                        }
+                        case pwm_dev:
+                        {
+                            cn->item.pl.vDevId = devIdx[i];
+                            addToBranch(pwmBr,cn);
+                            devdstinct|=pwm_dev;
+                            break;
+                        }
+                        default:
+                        {
+                            prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
+                            break;
+                        }
+                    } // end of switch devType
+                }   // end of devices loop
+                break;
+            } // end of art_res switch
+            case art_poll_e:
+            {
+                    addToBranch(localBr, cn);
+                    break;
+            }
+            case art_syn_pack_e:
+            {
+                prnErr(log_con, "A SYNC!!!!\n");
+                addToBranch(dropBr,cn);
+                break;
+            }
+            default:
+            {
+                prnErr(log_con,"\t\t\t\tConsumed Other ArtNetPack %d :  Pkt.idx%d\n",(int)art_res,  cn->item.pl.itemId);
+                addToBranch(dropBr,cn);
+                //putNode(cn->pb, cn, &cnn);
+                //cn = cnn;
+            }
+        }
+        cn = cn->nxt;
+    } // end of cn loop
+    prnDbg(log_con,"Got %d nodes in Ntfy, uni Received = %u of %u\n",nodecnt, devList.glo_uni_map->reserved, devList.glo_uni_map->elements);
+
+    if(pwmBr->hd)
+    {
+        sockdat_ntfy_t pwmmsg;
+        pwmmsg.mtyp = msg_typ_socket_ntfy;
+        pwmmsg.rq_owner = pwmBr->hd->pb;
+        pwmmsg.datapt = pwmBr->hd;
+        pwmBr->lst->nxt  = NULL;
+        prnLLdetail(pwmBr->hd, "CONS", "PwmLL");
+        post_msg(&pwm_pb->rq,&pwmmsg,sizeof(sockdat_ntfy_t));
+    }
+    if(pixBr->hd)
+    {
+        sockdat_ntfy_t pixmsg;
+        pixmsg.mtyp = msg_typ_socket_ntfy;
+        pixmsg.rq_owner = pixBr->hd->pb;
+        pixmsg.datapt = pixBr->hd;
+        pixBr->lst->nxt  = NULL;
+        prnLLdetail(pixBr->hd, "CONS", "PixLL");
+        post_msg(&pix_pb->rq,&pixmsg,sizeof(sockdat_ntfy_t));
+        prnDbg(log_con,"Sending pix Pkt to handler\n");
+    }
+    if(dropBr->hd)
+    {
+        dropBr->lst->nxt  = NULL;
+        prnLLdetail(dropBr->hd, "DROPS", "Drops");
+        i = putNodes(dropBr->hd->pb, dropBr->hd);
+        prnDbg(log_con,"Dropped %d unamapped Pkts\n",i);
+    }
+    if(localBr->hd)
+    {
+        localBr->lst->nxt = NULL;
+        make_artnet_resp(localBr->hd->item.pl.msg);
+        i = putNodes(localBr->hd->pb, localBr->hd);
+    }
 }
 
 

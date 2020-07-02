@@ -154,7 +154,16 @@ typedef struct
     uint8_t       raw_unis[UNI_PER_OUT][512];
     };
 }mimaspack_t;
-typedef uint8_t stream_cfg_t;
+
+typedef union
+{
+    uint8_t raw;
+    struct{
+    uint8_t clk_spd:5;
+    uint8_t rst_dur:3;
+    };
+}stream_cfg_t;
+
 typedef struct
 {
     uint8_t             *wrPt[UNI_PER_OUT];
