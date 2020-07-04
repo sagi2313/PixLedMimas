@@ -1,7 +1,7 @@
 #include "vdevs.h"
 #include "type_defs.h"
 #include "bm_handling.h"
-
+#include "utils.h"
 mimas_dev_t     mimas_devices;
 vdevs_t         devList;
 
@@ -62,7 +62,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     uint32_t uni_need;
     uint32_t out_need, res;
     addressing_t tmpAddr;
-    int idx, i , j, k;
+    int idx, i , j, k, u;
     int hwIdx=0;
     idx = findFreeDevListSlot();
     if(idx == -1)return(-1);
@@ -92,8 +92,27 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
         k = MIN(j, wsdev->pix_per_uni * (uint32_t)wsdev->colCnt);
         if(checkfDmxRangeIsFree(tmpAddr+i, 0,k)==0)
         {
-            printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
-            return(-5);
+            uint32_t users = getUsersOfAddr(tmpAddr+i);
+            u=0;
+            while(users)
+            {
+                if(users & 1)
+                {
+                    if(devList.devs[u].dev_com.dev_type!=ws_pix_dev)
+                    {
+                        printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
+                        return(-5);
+                    }
+                    else
+                    {
+                        prnFinf(log_any,"universe %u shared with vDev %u\n",tmpAddr+i, u);
+                    }
+                }
+                u++;
+                users>>=1;
+            }
+            //printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
+            //return(-5);
         }
         j-=k;
     }
@@ -122,6 +141,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
             ws->com.vDevIdx = idx;
             ws->colCnt = wsdev->colCnt;
             ws->col_map = wsdev->col_map;
+            ws->strm_proto = wsdev->strm_proto;
             memset(&ws->com.vdsm,0,sizeof(vdev_sm_t));
             ws->com.vdsm.expected_full_map = BIT64(UNI_PER_OUT) - 1u;
             out_need--;
@@ -141,7 +161,8 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
     for(i=0;i<uni_need;i++)
     {
         k = MIN(j, wsdev->pix_per_uni * (uint32_t)wsdev->colCnt);
-        addAddrUsage(tmpAddr++,0, k);
+        addAddrUsage(tmpAddr++,0, k, idx);
+        prnFinf(log_any,"vDev %u relUni %u mapped to addr %u\n", idx, i, tmpAddr-1);
         j-=k;
     }
 
@@ -342,7 +363,7 @@ int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t* cfg)
     cfg->com.dev_type = pwm_dev;
     cfg->com.vDevIdx = idx;
     //if( (i+best_start_idx) > MIMAS_PWM_OUT_PER_GRP_CNT) devList.devs[idx].sub_dev_cnt++;
-    addAddrUsage(devList.devs[idx].dev_com.start_address,devList.devs[idx].pwm_vdev->com.start_offset, offset);
+    addAddrUsage(devList.devs[idx].dev_com.start_address,devList.devs[idx].pwm_vdev->com.start_offset, offset, idx);
     if(devList.last_used_idx<idx)devList.last_used_idx = idx;
     vdev_sm_t* vdsm = &devList.devs[idx].dev_com.vdsm;
     memset((void*)vdsm, 0, sizeof(vdev_sm_t));
@@ -512,32 +533,38 @@ int checkDmxCollission(ln_t lst, uint16_t Start,  uint16_t End)
     {
         rng = (dmx_chan_range_t*)lst->data;
         if (
-            (Start>=rng->Start) && (Start <= rng->Start) ||
-            (End>=rng->Start) && (End <= rng->Start)
+            (Start>=rng->Start) && (Start <= rng->End) ||
+            (End>=rng->Start) && (End <= rng->End)
         )return(1); //collision
         lst =lst->nxt;
     }
     return(0); //ok
 }
 
-int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end)
+int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end, uint32_t owner)
 {
     ln_t node;
     dmx_chan_usage_t *AddrNode;
     dmx_chan_range_t  *DmxNode = (dmx_chan_range_t  *)malloc( sizeof(dmx_chan_range_t));
     DmxNode->End = end;
     DmxNode->Start = start;
+    DmxNode->owner_vdevIdx = BIT32(owner);
 
     node = findItem(devList.addr_usage, (void*)&artAdr, sizeof(addressing_t), 0);
     if(node)
     {
         AddrNode = (dmx_chan_usage_t *)node->data;
+        // the dmx range collision is removed to allow for shared a dmx input range
+        // among several vDevs (of same type)
+        // any dmx collision checks should be done before coming here
+        /*
         int col = checkDmxCollission(AddrNode->ranges, start, end);
         if(col)
         {
             free(DmxNode);
             return(1); //error
         }
+        */
         addItem(&AddrNode->ranges, DmxNode);
     }
     else
@@ -554,7 +581,8 @@ int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t end)
     }
 
     AddrNode->items++;
-    AddrNode->nxt_free=end+1;
+    AddrNode->nxt_free= MAX( (end+1) , AddrNode->nxt_free ) ;
+    AddrNode->owner_vdevIdx |= BIT32(owner);
     return(0); //success
 }
 
@@ -589,6 +617,16 @@ int checkfDmxRangeIsFree(addressing_t adr, uint16_t Start, uint16_t End)
     if(node == NULL)return(1);
     dmx_chan_usage_t *AddrNode = (dmx_chan_usage_t *)node->data;
     return(!checkDmxCollission( AddrNode->ranges, Start, End));
+}
+
+uint32_t getUsersOfAddr(addressing_t adr)
+{
+    if(devList.addr_usage == NULL)return(0);
+    ln_t node;
+    node = findItem(devList.addr_usage, (void*)&adr, sizeof(addressing_t), 0);
+    if(node == NULL)return(0);
+    dmx_chan_usage_t *AddrNode = (dmx_chan_usage_t *)node->data;
+    return(AddrNode->owner_vdevIdx);
 }
 
 /*

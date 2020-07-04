@@ -55,12 +55,13 @@ typedef struct
 
 typedef struct
 {
-    vdev_common_t   com;
-    uint16_t        pixel_count;
-    color_mapping_e col_map;
-    pixel_col_vec_e colCnt;
-    uint8_t         pix_per_uni;
-    uint8_t         out_start_id;
+    vdev_common_t       com;
+    uint16_t            pixel_count;
+    color_mapping_e     col_map;
+    pixel_col_vec_e     colCnt;
+    stream_proto_type_e strm_proto;
+    uint8_t             pix_per_uni;
+    uint8_t             out_start_id;
 }ws_pix_vdev_t;
 
 #define PIX_COL_MAP_DEF (rgb_map_e)
@@ -179,6 +180,7 @@ typedef struct
 {
     uint16_t        Start;
     uint16_t        End;
+    uint32_t        owner_vdevIdx;
 }dmx_chan_range_t;
 
 typedef struct __dbg_dmx_chan_ranges_list *dbg_dmx_range;
@@ -191,21 +193,22 @@ typedef struct __dbg_dmx_chan_ranges_list
 
 typedef struct
 {
-    addressing_t    address;
-    uint16_t        nxt_free;
-    union
-    {
-        uint8_t         bm[64];
+    addressing_t    address;        // the address of this universe
+    uint32_t        owner_vdevIdx;  // bitmap of vDevs getting input from this universe
+    uint16_t        nxt_free;       // this is the next dmx channel free in the given universe
+    //union
+    //{
+        //uint8_t         bm[64];
         struct
         {
-            uint16_t        items;
+            uint16_t        items; // num of items in the dmx ranges list
             union
             {
                 ln_t            ranges;
                 dbg_dmx_range   dbg;
             };
         };
-    };
+    //};
 }dmx_chan_usage_t;
 
 typedef struct __dbg_dmx_chan_usage_list *dbg_dmx_use;
@@ -226,7 +229,7 @@ typedef struct
     union
     {
         ln_t            addr_usage;
-        dbg_dmx_use     dbg_list;
+        dbg_dmx_use     dbg_list; // full map of addresses and dmx ranges per address, that are currently reserved
     };
     bm_t*   glo_uni_map;
     bm_t*   tmp_uni_map;
@@ -256,10 +259,11 @@ int setPwmVal(pwm_vdev_t* vDev, uint8_t ch, uint16_t val);
 uint16_t pwmMapValue(pwm_vdev_t* vDev, uint8_t ch, uint8_t* val);
 inline int8_t getPwmGrp(pwm_vdev_t* vDev, uint8_t ch);
 inline int8_t getPwmIdx(pwm_vdev_t* vDev, uint8_t ch);
-int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t End);
+int addAddrUsage(addressing_t artAdr, uint16_t start,  uint16_t End, uint32_t owner);
 uint16_t getNextFreeChAtAddr(addressing_t adr);
 int checkfDmxChIsFree(addressing_t adr, uint16_t chan);
 int checkfDmxRangeIsFree(addressing_t adr, uint16_t Start, uint16_t End);
+uint32_t getUsersOfAddr(addressing_t adr);
 #define GET_VDEV_TYPE( D )  ((vdevs_e)(*((vdevs_e*)(&D))))
 #define GET_PWMS_PTR  (&mimas_devices.pwms[0])
 
