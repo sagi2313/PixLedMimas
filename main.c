@@ -99,6 +99,15 @@ void make_a_dev(void)
     res =build_dev_ws(&vd);
 
     prnDev(res);
+
+    dmx_vdev_t dmxdev;
+    dmxdev.channel_count = 300;
+    dmxdev.out_start_id = 0xff;
+    dmxdev.com.start_address = 90;
+    res = build_dev_dmx(&dmxdev);
+    res = build_dev_dmx(&dmxdev);
+    dmxdev.out_start_id = 0xff;
+    res = build_dev_dmx(&dmxdev);
 }
 
 
@@ -139,10 +148,6 @@ void InitOuts(void)
 
 int sendOutToMimas(int oSel)
 {
-    //int n =  (oSel + 2);
-    //memcpy(outs[n].mpack.raw_buf, outs[oSel].mpack.raw_buf, outs[oSel].dlen);
-    //outs[n].dlen = outs[oSel].dlen;
-    //mimas_store_packet(n,(uint8_t*)&outs[n].mpack,outs[n].dlen, 0x61);
     return(mimas_store_packet(oSel,(uint8_t*)&outs[oSel].mpack,outs[oSel].dlen,  outs[oSel].cfg.raw));
 }
 
@@ -337,10 +342,11 @@ void  consumeList(peer_pack_t* pkt)
                     switch(GET_VDEV_TYPE(*cdev))
                     {
                         case ws_pix_dev:
+                        case dmx_out_dev:
                         {
                             cn->item.pl.vDevId = devIdx[i];
                             addToBranch(pixBr,cn);
-                            devdstinct|=ws_pix_dev;
+                            devdstinct|=GET_VDEV_TYPE(*cdev);
                             break;
                         }
                         case pwm_dev:
@@ -717,8 +723,8 @@ void *pix_handler(void* dat)
     int                 devsIdxs[MAX_VDEV_CNT];
     mimas_out_dev_t**   vDevs;
     mimas_out_dev_t*    cdev;
-    vdev_sm_t*          sm;
-    pix_dev_pt          pixDev;
+    volatile vdev_sm_t*          sm;
+    volatile pix_dev_pt          pixDev;
     int                 hwId=-1;
     uint16_t            mimas_start_bm=0;
     uint32_t            mimas_proto_bm=0;
@@ -729,23 +735,31 @@ void *pix_handler(void* dat)
     addressing_t        DuplicateUni=0;
     uint8_t             updMimas=0;
     fl_t                cn = NULL;
+    //get count of nrz + dmx devices
     do
     {
         devCnt = findVDevsOfType(ws_pix_dev,NULL);
         if(devCnt<1) usleep(100000ul);
     }while(devCnt<1);
+    devCnt += findVDevsOfType(dmx_out_dev,NULL);
+    // allocate memory
     devs = (int*)calloc(devCnt,sizeof(int));
     vDevs = (mimas_out_dev_t*)calloc(devCnt,sizeof(mimas_out_dev_t*));
-    findVDevsOfType(ws_pix_dev,devs);
+    // fill allocated memory
+    devCnt = findVDevsOfType(ws_pix_dev, devs);
+    devCnt += findVDevsOfType(dmx_out_dev, &devs[devCnt]);
     for(i=0;i<devCnt;i++)
     {
         cdev = &devList.devs[devs[i]];
         vDevs[i] = cdev;
-        for(j=0;j<cdev->sub_dev_cnt;j++)
+        if(cdev->dev_com.dev_type == ws_pix_dev)
         {
-            pixDev = cdev->pix_devs[j];
-            hwId=pixDev->out_start_id;
-            outs[hwId].fullMap = pixDev->com.vdsm.expected_full_map;
+            for(j=0;j<cdev->sub_dev_cnt;j++)
+            {
+                pixDev = cdev->pix_devs[j];
+                hwId=pixDev->out_start_id;
+                outs[hwId].fullMap = pixDev->com.vdsm.expected_full_map;
+            }
         }
         vDevsExpectedBm|=BIT32(devs[i]);
     }
@@ -799,21 +813,25 @@ void *pix_handler(void* dat)
                 {
                     cdev = &devList.devs[devs[i]];
                     cdev->dev_com.vdsm.curr_map = 0;
-                    for(j=0;j<cdev->sub_dev_cnt;j++)
+                    if(cdev->dev_com.dev_type == ws_pix_dev)
                     {
-                        pixDev = cdev->pix_devs[j];
-                        pixDev->com.vdsm.curr_map = 0;
-                        outs[pixDev->out_start_id].fillMap = 0;
-                        outs[pixDev->out_start_id].dlen = 0;
-                        //outs[pixDev->out_start_id+2].fillMap = 0;
-                        //outs[pixDev->out_start_id+2].dlen = 0;
-                        //mimas_start_bm&=~(BIT16(pixDev->out_start_id));
-                        mimas_start_bm = 0;
-                        //SET_PROTO(mimas_proto_bm,STRM_WS,pixDev->out_start_id);
-                        mimas_proto_bm=0;
+                        for(j=0;j<cdev->sub_dev_cnt;j++)
+                        {
+                            pixDev = cdev->pix_devs[j];
+                            pixDev->com.vdsm.curr_map = 0;
+                            outs[pixDev->out_start_id].fillMap = 0;
+                            outs[pixDev->out_start_id].dlen = 0;
+                        }
+                    }
+                    else
+                    {
+                        outs[cdev->dmx_dev->out_start_id].fillMap = 0;
+                        outs[cdev->dmx_dev->out_start_id].dlen = 0;
                     }
                     vDevsReadyBm&=~(BIT32(devs[i]));
                 }
+                mimas_start_bm = 0;
+                mimas_proto_bm=0;
                 DuplicateUni = 0;
                 updMimas=0;
             }
@@ -858,50 +876,64 @@ void *pix_handler(void* dat)
                         cdev = &devList.devs[devsIdxs[i]];
                         sm = &cdev->dev_com.vdsm;
                         hwId = -1;
-                        for(j=0;j<cdev->sub_dev_cnt;j++)
+                        if(cdev->dev_com.dev_type == ws_pix_dev)
                         {
-                            pixDev = cdev->pix_devs[j];
-                            if((pixDev->com.end_address >= absAddr) && (pixDev->com.start_address <=absAddr ))
+                            for(j=0;j<cdev->sub_dev_cnt;j++)
                             {
-                                relAddr = absAddr - pixDev->com.start_address;
-                                hwId = pixDev->out_start_id;
-                                if(pixDev->com.vdsm.curr_map & BIT64(relAddr))
+                                pixDev = cdev->pix_devs[j];
+                                if((pixDev->com.end_address >= absAddr) && (pixDev->com.start_address <=absAddr ))
                                 {
-                                    prnDbg(log_pix,"CAUGHT a Duplicate Universe %u : hwID %u\n", absAddr, hwId);
-                                    DuplicateUni = absAddr;
-                                    break;
-                                }
-                                else
-                                {
-                                    pixDev->com.vdsm.curr_map|= BIT64(relAddr);
-                                    sm->curr_map|= BIT64(relAddr) << (j * UNI_PER_OUT);
-                                    outs[hwId].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
-                                    prnDbg(log_pix,"Got rAdr %u for hwId %u, bm: %llx\n",relAddr, hwId, pixDev->com.vdsm.curr_map);
-                                    //outs[hwId+2].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
-                                }
-                                mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
-                                if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
-                                {
-                                    res = sendOutToMimas(hwId);
-                                    if(res) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, res);}
-                                    else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, res);}
-                                    mimas_start_bm|=BIT16(hwId);
-                                    SET_PROTO(mimas_proto_bm, outs[hwId].proto, hwId);
-                                    if(sm->curr_map == sm->expected_full_map)
+                                    relAddr = absAddr - pixDev->com.start_address;
+                                    hwId = pixDev->out_start_id;
+                                    if(pixDev->com.vdsm.curr_map & BIT64(relAddr))
                                     {
-                                        prnDbg(log_pix, "Full pix frame received\n");
-                                        if(vDevsReadyBm & BIT32(cdev->dev_com.vDevIdx))
+                                        prnDbg(log_pix,"CAUGHT a Duplicate Universe %u : hwID %u\n", absAddr, hwId);
+                                        DuplicateUni = absAddr;
+                                        break;
+                                    }
+                                    else
+                                    {
+                                        pixDev->com.vdsm.curr_map|= BIT64(relAddr);
+                                        sm->curr_map|= BIT64(relAddr) << (j * UNI_PER_OUT);
+                                        outs[hwId].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
+                                        prnDbg(log_pix,"Got rAdr %u for hwId %u, bm: %llx\n",relAddr, hwId, pixDev->com.vdsm.curr_map);
+                                        //outs[hwId+2].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
+                                    }
+                                    mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
+                                    if( (outs[hwId].fullMap>0) && (outs[hwId].fillMap == outs[hwId].fullMap) )
+                                    {
+                                        res = sendOutToMimas(hwId);
+                                        if(res) {prnErr(log_pix,"Error: Sending data to mimas for port %d, rc = %d\n", hwId, res);}
+                                        else  {prnDbg(log_pix,"Sent data to mimas for port %d, rc = %d\n", hwId, res);}
+                                        mimas_start_bm|=BIT16(hwId);
+                                        SET_PROTO(mimas_proto_bm, outs[hwId].proto, hwId);
+                                        if(sm->curr_map == sm->expected_full_map)
                                         {
-                                            prnErr(log_pix,"vDev %d already marked ready\n",cdev->dev_com.vDevIdx);
-                                        }
-                                        else
-                                        {
-                                            vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
+                                            prnDbg(log_pix, "Full pix frame received for vDev %u\n", devsIdxs[i]);
+                                            if(vDevsReadyBm & BIT32(cdev->dev_com.vDevIdx))
+                                            {
+                                                prnErr(log_pix,"vDev %d already marked ready\n",cdev->dev_com.vDevIdx);
+                                            }
+                                            else
+                                            {
+                                                vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
+                                            }
                                         }
                                     }
+                                    //break;
                                 }
-                                //break;
                             }
+                        }
+                        else if(GET_VDEV_TYPE(*cdev) == dmx_out_dev)
+                        {
+                            dmx_vdev_t* ddev = cdev->dmx_dev;
+                            hwId = ddev->out_start_id;
+                            outs[hwId].dlen += ddev->channel_count;
+                            outs[hwId].fillMap = 1; /* not sure... */
+                            res = sendOutToMimas(hwId);
+                            mimas_start_bm|=BIT16(hwId);
+                            SET_PROTO(mimas_proto_bm, outs[hwId].proto, hwId);
+                            vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
                         }
                         if(DuplicateUni)break;
                     }
@@ -1141,7 +1173,7 @@ int main(void)
     int res;
     sys_init();
     prnFinf(log_any,"PixLed Starting (tid:%d)...\n", gettid);
-    //setLogLevel(log_pix,log_dbg);
+   // setLogLevel(log_pix,log_dbg);
     initMessaging();
     anetp->artPB = sock_pb;
     /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/

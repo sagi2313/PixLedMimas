@@ -249,6 +249,7 @@ pwm_out_dev_t* getMimasPwmDevices( void);
 streamer_vdev_u* getMimasStreamerDevices( void);
 int build_dev_pwm(pwm_vdev_t* pwmdev, pwm_cfg_t*  cfg);
 int build_dev_ws(ws_pix_vdev_t* wsdev);
+int build_dev_dmx(dmx_vdev_t* dmxdev);
 int findVDevAtAddr(addressing_t adr);
 int findVDevsAtAddr(addressing_t adr, int* idxs);
 int findVDevsOfType(vdevs_e typ, int* idxs);

@@ -53,6 +53,69 @@ int findFreeDevListSlot(void)
     }
     return(-1);
 }
+
+int build_dev_dmx(dmx_vdev_t* dmxdev)
+{
+    int idx, hwIdx;
+
+    if((dmxdev->channel_count<1)||(dmxdev->channel_count>512))
+    {
+        prnInf(log_any,"setting dmx channel count to 512\n");
+        dmxdev->channel_count = 512;
+    }
+
+    if((dmxdev->out_start_id>=0)&&(dmxdev->out_start_id<MIMAS_STREAM_OUT_CNT))
+    {
+        if(mimas_devices.streamers[dmxdev->out_start_id].com.dev_type!=unused_dev)
+        {
+            prnErr(log_any, "Requested streamer output(%d) is reserved, aborting\n", dmxdev->out_start_id);
+            return(-2);
+        }
+        hwIdx = dmxdev->out_start_id;
+    }
+    else
+    {
+        for(hwIdx=0;hwIdx<MIMAS_STREAM_OUT_CNT;hwIdx++)
+        {
+            if(mimas_devices.streamers[hwIdx].com.dev_type == unused_dev)break;
+        }
+        if(hwIdx>=MIMAS_STREAM_OUT_CNT)
+        {
+            prnErr(log_any, "All streamer outputs are reserved, aborting\n");
+            return(-3);
+        }
+    }
+    idx = findFreeDevListSlot();
+    if(idx == -1)return(-1);
+
+    if(dmxdev->com.start_address == 0xffff) /*means find next free */
+    {
+        dmxdev->com.start_address = devList.next_free_addr;
+    }
+    vdev_common_t* dcom = &dmxdev->com;
+    devList.devs[idx].dev_com.dev_type = dmx_out_dev;
+    devList.devs[idx].dev_com.start_address = dcom->start_address;
+    devList.devs[idx].dev_com.end_address = dcom->start_address;
+    devList.devs[idx].dev_com.start_offset = 0;
+    devList.devs[idx].dev_com.end_offset = dmxdev->channel_count;
+    memset(&devList.devs[idx].dev_com.vdsm, 0, sizeof(vdev_sm_t));
+    devList.devs[idx].dev_com.vDevIdx = idx;
+    devList.devs[idx].sub_dev_cnt = 1;
+    devList.devs[idx].uni_count = 1;
+    devList.devs[idx].chann_count =  dmxdev->channel_count;
+    devList.devs[idx].dmx_dev = (dmx_vdev_t*)calloc(1, sizeof(dmx_vdev_t));
+    devList.devs[idx].dmx_dev->out_start_id = hwIdx;
+    dmxdev->com = devList.devs[idx].dev_com;
+    devList.devs[idx].dmx_dev->com = devList.devs[idx].dev_com;
+    if(devList.max_addr < dcom->start_address)devList.max_addr = dcom->start_address;
+    devList.next_free_addr = devList.max_addr+1;
+    addAddrUsage(dcom->start_address, 0, dmxdev->channel_count-1, idx);
+    prnFinf(log_any,"vDev %u mapped to addr %u\n", idx,  dcom->start_address);
+    if(devList.last_used_idx<idx)devList.last_used_idx = idx;
+    return(idx);
+}
+
+
 int build_dev_ws(ws_pix_vdev_t* wsdev)
 {
     if((wsdev->pix_per_uni==0)||(wsdev->pix_per_uni>170))
@@ -98,7 +161,7 @@ int build_dev_ws(ws_pix_vdev_t* wsdev)
             {
                 if(users & 1)
                 {
-                    if(devList.devs[u].dev_com.dev_type!=ws_pix_dev)
+                    if(devList.devs[u].dev_com.dev_type == pwm_dev)
                     {
                         printf("Universe %d is not free for this pixel device, aborting\n", tmpAddr+i);
                         return(-5);
@@ -447,6 +510,7 @@ int findVDevsOfType(vdevs_e typ, int* idxs)
             count++;
         }
     }
+    //if(idxs!=NULL) idxs[count] = -1;
     return(count);
 }
 
