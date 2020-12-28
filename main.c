@@ -87,16 +87,44 @@ void make_a_dev(void)
 
     ws_pix_vdev_t   vd;
     vd.strm_proto = stream_proto_nrz_e;
-    vd.pixel_count = 1500;
+    vd.pixel_count = 1500; //1500
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-    vd.strm_proto = stream_proto_spi_e;
-    vd.pixel_count = 2250;
+prnDev(res);
+/*
+    memset((void*)&vd, 0, sizeof(ws_pix_vdev_t));
+    vd.strm_proto = stream_proto_nrz_e;
+    vd.pixel_count = 1000; //1500
     vd.pix_per_uni = 150;
-    vd.com.start_address = 17;
+    vd.col_map = grb_map_e;
+    vd.com.start_address = 0xFFFF;
     res =build_dev_ws(&vd);
+prnDev(res);*/
+
+/*
+    vd.strm_proto = stream_proto_nrz_e;
+    vd.pixel_count = 500; //1500
+    vd.pix_per_uni = 150;
+    vd.col_map = grb_map_e;
+    vd.com.start_address = 48;
+    res =build_dev_ws(&vd);
+prnDev(res);
+    vd.strm_proto = stream_proto_nrz_e;
+    vd.pixel_count = 500; //1500
+    vd.pix_per_uni = 150;
+    vd.col_map = grb_map_e;
+    vd.com.start_address = 52;
+    res =build_dev_ws(&vd);
+prnDev(res);
+*/
+/*
+    vd.strm_proto = stream_proto_spi_e;
+    vd.pixel_count = 750;
+    vd.pix_per_uni = 150;
+    vd.com.start_address = 22;
+    //res =build_dev_ws(&vd);
 
     prnDev(res);
 
@@ -104,10 +132,11 @@ void make_a_dev(void)
     dmxdev.channel_count = 300;
     dmxdev.out_start_id = 0xff;
     dmxdev.com.start_address = 90;
-    res = build_dev_dmx(&dmxdev);
-    res = build_dev_dmx(&dmxdev);
+    //res = build_dev_dmx(&dmxdev);
+    //res = build_dev_dmx(&dmxdev);
     dmxdev.out_start_id = 0xff;
-    res = build_dev_dmx(&dmxdev);
+    //res = build_dev_dmx(&dmxdev);
+    */
 }
 
 
@@ -797,6 +826,7 @@ void *pix_handler(void* dat)
             }
             if(updMimas)
             {
+                Nulls=0;
                 tnow = mimas_ref;
                 i=mimas_refresh_start_stream(mimas_start_bm,mimas_proto_bm);
                 //usleep(20000l);
@@ -811,6 +841,11 @@ void *pix_handler(void* dat)
                 }
                 for(i=0;i<devCnt;i++)
                 {
+                   /* if(( BIT32(devs[i]) &  vDevsReadyBm) == 0)
+                    {
+                        prnDbg(log_pix,"Skipped dev %d, not ready\n", devs[i]);
+                        continue;
+                    }*/
                     cdev = &devList.devs[devs[i]];
                     cdev->dev_com.vdsm.curr_map = 0;
                     if(cdev->dev_com.dev_type == ws_pix_dev)
@@ -835,12 +870,12 @@ void *pix_handler(void* dat)
                 DuplicateUni = 0;
                 updMimas=0;
             }
-            if(Nulls++>500)
+            /*if(Nulls++>5000)
             {
                 usleep(15000l);
                 Nulls = 0;
-                prnErr(log_pix,"SleepTime\n");
-            }
+                prnFinf(log_pix,"SleepTime\n");
+            }*/
         }while(pkt == NULL);
         Nulls=0;
         switch(pkt->genmtyp)
@@ -887,7 +922,7 @@ void *pix_handler(void* dat)
                                     hwId = pixDev->out_start_id;
                                     if(pixDev->com.vdsm.curr_map & BIT64(relAddr))
                                     {
-                                        prnDbg(log_pix,"CAUGHT a Duplicate Universe %u : hwID %u\n", absAddr, hwId);
+                                        prnFinf(log_pix,"CAUGHT a Duplicate Universe %u : hwID %u\n", absAddr, hwId);
                                         DuplicateUni = absAddr;
                                         break;
                                     }
@@ -896,7 +931,7 @@ void *pix_handler(void* dat)
                                         pixDev->com.vdsm.curr_map|= BIT64(relAddr);
                                         sm->curr_map|= BIT64(relAddr) << (j * UNI_PER_OUT);
                                         outs[hwId].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
-                                        prnDbg(log_pix,"Got rAdr %u for hwId %u, bm: %llx\n",relAddr, hwId, pixDev->com.vdsm.curr_map);
+                                        //prnFinf(log_pix,"Got rAdr %u for hwId %u, bm: %llx\n",relAddr, hwId, pixDev->com.vdsm.curr_map);
                                         //outs[hwId+2].dlen += pixDev->pix_per_uni * (int)pixDev->colCnt;
                                     }
                                     mapColor(&ap->ArtDmxOut.dmx,&outs[hwId],relAddr);
@@ -917,6 +952,7 @@ void *pix_handler(void* dat)
                                             else
                                             {
                                                 vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
+                                                break;
                                             }
                                         }
                                     }
@@ -935,11 +971,13 @@ void *pix_handler(void* dat)
                             SET_PROTO(mimas_proto_bm, outs[hwId].proto, hwId);
                             vDevsReadyBm|=BIT32(cdev->dev_com.vDevIdx);
                         }
-                        if(DuplicateUni)break;
+                        if(DuplicateUni)
+                        {
+                            break;
+                        }
                     }
                     prnDbg(log_pix,"Consumed item %d inPixHandler addr %u\n", cn->item.pl.itemId, absAddr);
                     putNode(cn->pb,cn, &cn);
-
                 }
                 break;
             }
