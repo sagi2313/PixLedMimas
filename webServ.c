@@ -16,7 +16,7 @@
 #include "utils.h"
 #include "type_defs.h"
 #include <dirent.h>
-
+#include "vdevs.h"
 #define WEB_SERV_PORT 2313
 #define MAX_WEB_CLIENTS 32
 #define SERVER_STRING "Server: SagiNode Srv/0.1.0"
@@ -25,6 +25,8 @@
 #define WEBCLIENT_TIMEOUT 31000u
 extern app_node_t* anetp;
 static  node_t *Node;
+extern vdevs_t         devList;
+
 const char favico[]="<link rel=\"shortcut icon\" href=\"#\" />\r\n";
 
 const char tetsPage[]= "<script language=\"JavaScript\"> function formToJson(form){var pass=form.pass.value; var ssid=form.ssid.value; var" \
@@ -118,7 +120,7 @@ resp_index_t resp_index[]= \
 			{.resp = frmPage, 			.url = "/frm1\0", .flen=0},
 			{.resp = frmPage, 			.url = "/cfg\0", .flen=0},
 			{.resp = favico, 			.url = "/favicon.ico\0", .flen=0, .wPageName = other_page_e},
-			{.resp = NULL,              .url = "/js", .flen = 0, .wPageName = other_page_e},
+			{.resp = NULL,              .url = "/main", .flen = 0, .wPageName = other_page_e},
 			{.resp = NULL,              .url = "\0", .flen = 0}
 
 		};
@@ -176,6 +178,28 @@ int buildIndexPg(char* outf)
     outf[len]='\0';
 
     return(len);
+}
+
+void buildVdevsTreeAsJSON(char* json)
+{
+    int i;
+    char buf[4096];
+    memset(buf, 0, 4096);
+    mimas_out_dev_t *dev = &devList.devs[0];
+    int len = sprintf(&buf[0],"{devices:[");
+    for(i=0;i < MAX_VDEV_CNT; i++)
+    {
+        if(devList.devs[i].dev_com.dev_type != unused_dev)
+        {
+        len += sprintf(&buf[len],"{id:%u, devType:%u, startAddr:%u, endAddr:%u, startOffs:%u, endOffs:%u},"\
+        ,i,dev->dev_com.dev_type, dev->dev_com.start_address, dev->dev_com.end_address, dev->dev_com.start_offset, dev->dev_com.end_offset);
+        }
+        dev++;
+
+    }
+    len+=sprintf(&buf[len-1],"]}");
+    printf("\n%s\n", buf);
+
 }
 
 int buildColorMappingLists(char* dst)
@@ -555,7 +579,7 @@ static void *clientWorker(void* d)
     int sck = clients[id].client_sock;
     other_files_p f  = NULL;
     html_header_data_t hd;
-    printf("clientWorker %u created\n", id);
+    printf("----------------------------------------------------------------------------\nclientWorker %u created\n", id);
     char* buf = clients[id].buf;
     while(1)
     {
@@ -958,6 +982,7 @@ int webServStart(void)
 	//return;
     Node = anetp->artnode;
     otherRes = openFiles();
+    buildVdevsTreeAsJSON(NULL);
     initClients();
     webSockFd = webServSockInit(WEB_SERV_PORT);
     if(webSockFd<1)return(-1);

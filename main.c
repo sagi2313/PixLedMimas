@@ -1217,6 +1217,7 @@ int main(void)
     /*ascnp->artPB = createPB(RQ_DEPTH,"sACNPB", (void*)&rq_data[0],  sizeof(rq_data));*/
     anetp->artnode = createNode(protoArtNet);
     /*ascnp->artnode = createNode(protosACN);*/
+
     init_mimas_vdevs();
     InitOuts();
     initMimasIntf(NULL);
@@ -1253,7 +1254,7 @@ int main(void)
     prnFinf(log_any,"Starting Web Server...\n");
     while(1)
     {
-        //webServStart();
+        webServStart();
         //prnErr(log_any,"Web Server exited, restarting...\n");
         sleep(10);
     }
