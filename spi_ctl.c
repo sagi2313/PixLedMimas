@@ -95,19 +95,14 @@ inline static int spi_lock(void)
     char tsbuf[80];
     time_t now;
     struct tm tsepo;
+    int loops = 0;
     mimas_state_t mSt;
     mSt = mimas_get_state();
     c = 0;
-    while( mSt.idle == 1 )
+
+    while( mSt.raw_state != MIMAS_RDY )
     {
-        do
-        {
-            usleep((useconds_t)1);
-            if((c  &  (BIT32(128u) -1u)) == (BIT32(128u) -1u) )mimas_prn_state(&mSt); // printf every 128 checks
-            mSt = mimas_get_state();
-            //mimas_prn_state(&mSt);
-        }while((mSt.idle==1) && (++c<250000));
-        if( mSt.idle == 1 )
+        if((mSt.clk_rdy == 0) || (mSt.sys_err))
         {
             MIMAS_RESET
             time(&now);
@@ -117,14 +112,15 @@ inline static int spi_lock(void)
             usleep((useconds_t)1500);
             c=0;
         }
-    }
 
-    int loops = 0;
-    volatile uint_fast64_t delayns;
-    while( mSt.sys_rdy == 0 )
-    {
-        delayns = 0llu;
-        if(++loops > 5000) // wait upto 25 mSec (normally busy is about 350 uSec on a mimas_store_packet command)
+        do
+        {
+            usleep((useconds_t)2);
+            if((c  &  (BIT32(128u) -1u)) == (BIT32(128u) -1u) )mimas_prn_state(&mSt); // printf every 128 checks
+            mSt = mimas_get_state();
+            //mimas_prn_state(&mSt);
+        }while(( mSt.sys_idle == 0) && (++c<250000));
+        if(loops++ > 100)
         {
             prnErr(log_mim,"Mimas stuck badly!\n");
             mimas_prn_state(&mSt);
@@ -134,7 +130,7 @@ inline static int spi_lock(void)
             MIMAS_RESET
             prnErr(log_mim,"WARNING(%s): mimas reset in line:%d at %s, state after reset:\n", __FUNCTION__,__LINE__, tsbuf);
             usleep((useconds_t)1500);
-            mSt =mimas_get_state();
+            mSt = mimas_get_state();
             mimas_prn_state(&mSt);
             rc = pthread_spin_unlock(&spilock);
             if(rc)
@@ -149,10 +145,7 @@ inline static int spi_lock(void)
 #endif
             return(-100);
         }
-        //usleep((useconds_t )1);
-        while(++delayns < 10000llu);
-        mSt =mimas_get_state();
-     }
+    }
 #ifdef MIMAS_TIME_STAT
      clock_gettime(CLOCK_REALTIME, &ts[1]);
      prnFinf(log_mim, "Spin taken by %d after %ld nSec, loops = %d, c = %d\n",gettid, nsec_diff(&ts[1], &ts[0]), loops, c);
@@ -311,6 +304,7 @@ int mimas_store_pwm_val( uint16_t chanBM, uint16_t* val)
     }
     tr_pwm.len = MIMAS_HDR_LEN + 32u;
     if(spi_lock()!=0) return(-1000);
+
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr_pwm);
     /*
     unlock_sleep = ((uint64_t)tr_pwm.len/8llu);
@@ -459,7 +453,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
 
     for(i=0;i<MIMAS_STREAM_OUT_CNT;i++)
     {
-        mst = mimas_get_state();
+        /*mst = mimas_get_state();
         if( (mst.clk_rdy==0) || (mst.idle == 1) ||(mst.sys_rdy == 0) )
         {
         do{
@@ -468,7 +462,7 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
             mst = mimas_get_state();
             }while( (mst.clk_rdy==0) || (mst.idle == 1) ||(mst.sys_rdy == 0) );
 
-        }
+        }*/
         if((start_bm & BIT32(i))==0)continue;
 
         if(tr[i].len>0)

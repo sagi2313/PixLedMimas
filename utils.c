@@ -959,9 +959,9 @@ void mimas_test(out_def_t* outs, int byteCnt, uint16_t bm)
 inline mimas_state_t mimas_get_state(void)
 {
     mimas_state_t res;
-    res.clk_rdy = bcm2835_gpio_lev(MIMAS_CLK_RDY);
-    res.sys_rdy = bcm2835_gpio_lev(MIMAS_SYS_RDY);
-    res.idle = bcm2835_gpio_lev(MIMAS_IDLE);
+    res.clk_rdy =  bcm2835_gpio_lev(MIMAS_CLK_RDY);
+    res.sys_err =  bcm2835_gpio_lev(MIMAS_SYS_ERR);
+    res.sys_idle = bcm2835_gpio_lev(MIMAS_SYS_BUSY);
     return(res);
 }
 
@@ -970,18 +970,16 @@ inline void mimas_prn_state(mimas_state_t *st)
     mimas_state_t res;
     if(st == NULL ) res= mimas_get_state();
     else res = *st;
-    printf("MIMAS status: clk_rdy %u, sys_rdy = %u, irq = %u\n",  res.clk_rdy, res.sys_rdy, res.idle);
+    printf("MIMAS status: clk_rdy %u, sys_err = %u, sys_idle = %u\n",  res.clk_rdy, res.sys_err, res.sys_idle);
 }
 
 int initMimas(void)
 {
-    int retry = 3;
-
-    uint8_t clk_rdy, sys_ready, irq;
+    int retry = 10;
     bcm2835_gpio_fsel(MIMAS_RST, BCM2835_GPIO_FSEL_OUTP);
-    bcm2835_gpio_fsel(MIMAS_SYS_RDY, BCM2835_GPIO_FSEL_INPT);
+    bcm2835_gpio_fsel(MIMAS_SYS_ERR, BCM2835_GPIO_FSEL_INPT);
     bcm2835_gpio_fsel(MIMAS_CLK_RDY, BCM2835_GPIO_FSEL_INPT);
-    bcm2835_gpio_fsel(MIMAS_IDLE, BCM2835_GPIO_FSEL_INPT);
+    bcm2835_gpio_fsel(MIMAS_SYS_BUSY, BCM2835_GPIO_FSEL_INPT);
    // MIMAS_RESET
 
     bcm2835_gpio_set(MIMAS_RST);
@@ -995,12 +993,11 @@ int initMimas(void)
 
     do
     {
-        clk_rdy = bcm2835_gpio_lev(MIMAS_CLK_RDY);
-        sys_ready = bcm2835_gpio_lev(MIMAS_SYS_RDY);
-        irq  =  bcm2835_gpio_lev(MIMAS_IDLE);
-        uint32_t pads=bcm2835_gpio_pad(BCM2835_PADS_GPIO_0_27);
-        printf("clk_rdy %u, sys_rdy = %u, irq = %u, pads = %X\n", clk_rdy, sys_ready, irq, pads);
-        if((clk_rdy==1) && (sys_ready == 1) && (irq == 0))return(0);
+        mimas_state_t mst = mimas_get_state();
+        //uint32_t pads=bcm2835_gpio_pad(BCM2835_PADS_GPIO_0_27);
+        mimas_prn_state(&mst);
+        if((mst.clk_rdy==1) && (mst.sys_err == 0) && (mst.sys_idle == 1))return(0);
+        if(retry & 1)mimas_reset();
         bcm2835_delayMicroseconds(10000ull);
 
     }while(retry--);

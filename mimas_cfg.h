@@ -6,8 +6,9 @@
 /* PIN connections */
 #define MIMAS_RST       18 /*GPIO18 */
 #define MIMAS_CLK_RDY   17 /*GPIO17 */
-#define MIMAS_SYS_RDY   22 /*GPIO27 */
-#define MIMAS_IDLE      27 /*GPIO22 */
+#define MIMAS_SYS_ERR   27 /*GPIO27 */ /* Hi on mimas error, low when ready */
+#define MIMAS_SYS_BUSY      22 /*GPIO22 */ /*TOGGLES High when busy, low when ready for cmd */
+
 
 /* Streamer definitions */
 #define MIMAS_STREAM_OUT_CNT        (12)
@@ -29,12 +30,16 @@
 #define STRM_CLR         0x3
 
 #define SET_PROTO(R, P, I)  do{ R&=~(3<< (2*I) ); R|=(P<< (2*I));}while(0);
-
-typedef struct
+typedef union
 {
+    uint8_t raw_state:3;
+    uint8_t raw_dc:5;
+    struct    {
     uint8_t clk_rdy:1;
-    uint8_t sys_rdy:1;
-    uint8_t idle:1;
+    uint8_t sys_err:1;
+    uint8_t sys_idle:1;
     uint8_t dc:5;
+    };
 }mimas_state_t;
+#define MIMAS_RDY (5)
 #endif // MIMAS_CFG_H_INCLUDED

@@ -65,7 +65,7 @@ void make_a_dev(void)
     pwm_vdev_t pdev;
     cfg.com.start_address = 57;
     cfg.com.start_offset = 0;
-    cfg.ch_count = 4;
+    cfg.ch_count = 2;
     cfg.hwGrpIdx = PWM_GRP_A;
     cfg.hwStartIdx= 0;
     for(i=0;i<cfg.ch_count;i++)
@@ -73,16 +73,17 @@ void make_a_dev(void)
         cfg.chCfg[i].lims.minV = 1450u;//9000u;
         cfg.chCfg[i].lims.maxV = 6500u;//26000u;
         cfg.chCfg[i].chCtrl = PWM_CH_EN |  PWM_CH_16B | PWM_CH_BSW;
+
     }
     res = build_dev_pwm(&pdev, &cfg);
     cfg.com.start_address = 57;
     cfg.com.start_offset = 0;
-    cfg.ch_count = 2;
+    cfg.ch_count = 1;
     cfg.hwGrpIdx = PWM_GRP_B;
     cfg.hwStartIdx=0;
     cfg.chCfg[0].lims = pwm_def_limits_c;
     cfg.chCfg[0].chCtrl = PWM_CH_EN |  PWM_CH_16B | PWM_CH_BSW;
-    cfg.chCfg[0].lims.midV = 10;
+    //cfg.chCfg[0].lims.midV = 10;
     res = build_dev_pwm(&pdev, &cfg);
 
     ws_pix_vdev_t   vd;
@@ -92,7 +93,8 @@ void make_a_dev(void)
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
     res =build_dev_ws(&vd);
-prnDev(res);
+
+
 /*
     memset((void*)&vd, 0, sizeof(ws_pix_vdev_t));
     vd.strm_proto = stream_proto_nrz_e;
@@ -101,30 +103,30 @@ prnDev(res);
     vd.col_map = grb_map_e;
     vd.com.start_address = 0xFFFF;
     res =build_dev_ws(&vd);
-prnDev(res);*/
+prnDev(res);
 
-/*
+
     vd.strm_proto = stream_proto_nrz_e;
     vd.pixel_count = 500; //1500
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
-    vd.com.start_address = 48;
+    vd.com.start_address = 0xFFFF;
     res =build_dev_ws(&vd);
 prnDev(res);
     vd.strm_proto = stream_proto_nrz_e;
     vd.pixel_count = 500; //1500
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
-    vd.com.start_address = 52;
+    vd.com.start_address = 0xFFFF;
     res =build_dev_ws(&vd);
 prnDev(res);
-*/
-/*
+
+
     vd.strm_proto = stream_proto_spi_e;
     vd.pixel_count = 750;
     vd.pix_per_uni = 150;
-    vd.com.start_address = 22;
-    //res =build_dev_ws(&vd);
+    vd.com.start_address = 0xFFFF;
+    res =build_dev_ws(&vd);
 
     prnDev(res);
 
@@ -132,11 +134,14 @@ prnDev(res);
     dmxdev.channel_count = 300;
     dmxdev.out_start_id = 0xff;
     dmxdev.com.start_address = 90;
-    //res = build_dev_dmx(&dmxdev);
-    //res = build_dev_dmx(&dmxdev);
+    res = build_dev_dmx(&dmxdev);
     dmxdev.out_start_id = 0xff;
+    res = build_dev_dmx(&dmxdev);
+
     //res = build_dev_dmx(&dmxdev);
-    */
+*/
+
+prnDev(res);
 }
 
 
@@ -342,7 +347,7 @@ void  consumeList(peer_pack_t* pkt)
                     check_unis=0;
                     prnDbg(log_con,"Added uni %d to tmp, rez = %u\n",raw_addr.addr, devList.tmp_uni_map->reserved);
                 }
-                if(devList.tmp_uni_map->reserved>devList.glo_uni_map->reserved)
+                if(devList.tmp_uni_map->reserved > devList.glo_uni_map->reserved)
                 {
                     taken = updateBM(devList.glo_uni_map,bm_reserved_e,raw_addr.addr);
                     if(taken == bm_free_e)
@@ -396,8 +401,8 @@ void  consumeList(peer_pack_t* pkt)
             } // end of art_res switch
             case art_poll_e:
             {
-                    addToBranch(localBr, cn);
-                    break;
+                addToBranch(localBr, cn);
+                break;
             }
             case art_syn_pack_e:
             {
@@ -1168,6 +1173,8 @@ void* producer(void* dat)
         }
         else
         {
+            prnFinf(log_prod,"Stats:\n\tmsgAll  : %u\n\tmsgMiss : %u\n\tpktCnt  : %u\n\tframes : %u\n\tfps   : %0.3f\n",
+            artn->artnode->all,artn->artnode->miss,artn->artnode->packetsCnt, artn->artnode->frames,artn->artnode->fps);
             if(msgcnt == 0)
             {
                 prnDbg(log_prod,"msgs = 0\n");
@@ -1183,6 +1190,7 @@ void* producer(void* dat)
                 int errLocal;
                 errLocal = show_socket_error_reason(n->sockfd);
                 prnErr(log_prod,"================\nUnhandler Socket error:\n\terrno %d, sock ret %d, fd %d, errLocal %d\n================\n", errno, msgcnt, n->sockfd, errLocal);
+
             }
         }
     }
@@ -1374,6 +1382,7 @@ void pmwHan(void* dat)
                                     pwm_msg.ch_count[j]++;
                                     pwm_d[j].sleep_count[k] = pwm_d[j].sleep_time[k];
                                     pwm_d[j].ch_ctrls[k] = 0;
+                                    prnErr(log_pwm,"SLEEP j=%u, k=%u\n",j,k);
                                 }
                             }
                         }
@@ -1518,8 +1527,11 @@ void pmwHan(void* dat)
                             }
                         }while(j);
                         memset(upd_ctrl, 0, sizeof(upd_ctrl));
-                        pwm_d[k].UpdChCount = 0;
-                        pwm_d[k].needUpdate = 0;
+                        pwm_d[0].UpdChCount = 0;
+                        pwm_d[0].needUpdate = 0;
+                        pwm_d[1].UpdChCount = 0;
+                        pwm_d[1].needUpdate = 0;
+
                     }
                 //}
                 clock_gettime(CLOCK_REALTIME, &ts[2]);

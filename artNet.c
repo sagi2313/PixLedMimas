@@ -169,6 +169,7 @@ void make_artnet_resp_old(peer_pack_t* peep)
 
 void make_artnet_resp(sock_data_msg_t* peep)
 {
+    const char* devNames[]={"unused","pixel","dmx512","undef", "pwm"};
 	int i,k,j,cnt;
 	uint8_t     max_uni;
 	uint8_t     bindIdCount;
@@ -187,7 +188,7 @@ void make_artnet_resp(sock_data_msg_t* peep)
 	memcpy(&pr->bindIP, &pr->myIp, sizeof(ip4_addr_t));
 
     strcpy(&pr->ShortName[0] ,Node->nodeName);
-	strcpy(&pr->LongName[0], Node->longName);
+	//strcpy(&pr->LongName[0], Node->longName);
 	strcpy(&pr->NodeReport[0],"#0001 [0000]");
 
 	pr->port = ARTNET_PORT;
@@ -252,6 +253,7 @@ void make_artnet_resp(sock_data_msg_t* peep)
             }
             pr->NumPorts.Uchr[1] = i;
             printf("SubSw %d sending with %d SubOuts\n",pr->subSwitch, i);
+            sprintf(pr->LongName,"Dev %u, type %s",devIdx,devNames[devList.devs[devIdx].dev_com.dev_type]);
             usleep(50000);
             j = sendto(Node->sockfd,art,sizeof(art_net_pack_t),0,(const struct sockaddr*)&pp->sender, sizeof(struct sockaddr_in));
             cnt++;
