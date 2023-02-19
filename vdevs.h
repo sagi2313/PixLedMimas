@@ -56,10 +56,10 @@ typedef struct
 typedef struct
 {
     vdev_common_t       com;
-    uint16_t            pixel_count;
     color_mapping_e     col_map;
     pixel_col_vec_e     colCnt;
     stream_proto_type_e strm_proto;
+    uint16_t            pixel_count;
     uint8_t             pix_per_uni;
     uint8_t             out_start_id;
 }ws_pix_vdev_t;

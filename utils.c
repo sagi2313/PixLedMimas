@@ -66,6 +66,25 @@ int sys_init(void)
     {
         tasks[i].affinity &= (BIT8(cpu_online)-1u);
     }
+    int sqrc = sqlite3_open("/home/pi/pixleddb_dir/PixLed.db", &sqhan);
+    prnFinf(log_any,"SQLIte3 version : %s, retCode %d\n", sqlite3_libversion(), sqrc);
+    if(sqrc != 0) return;
+    char * SQ;
+    sqrc = asprintf(&SQ,"CREATE TABLE IF NOT EXISTS pixledCfg;SELECT * from pixledCfg(idx INT, name TEXT);");
+    sqlite3_stmt* stmt;
+    sqrc = sqlite3_prepare_v2(sqhan,SQ, -1, & stmt, NULL);
+    if (sqrc != SQLITE_OK)    prnErr(log_any, "Error(%d): %s\nSQ: %s\n", sqrc, sqlite3_errmsg(sqhan), SQ);
+    sqrc = sqlite3_step(stmt);
+    if (sqrc != SQLITE_OK)    prnErr(log_any, "Failed to fetch data: %s\n", sqlite3_errmsg(sqhan));
+    if (sqrc == SQLITE_ROW) {
+        prnFinf(log_any,"%s\n", sqlite3_column_text(stmt, 0));
+    }
+
+    sqlite3_finalize(stmt);
+    //sqlite3_close(db);
+
+    free(SQ);
+
 }
 
 uint64_t next_pow2_64(uint64_t x)
@@ -965,12 +984,12 @@ inline mimas_state_t mimas_get_state(void)
     return(res);
 }
 
-inline void mimas_prn_state(mimas_state_t *st)
+inline void mimas_prn_state(mimas_state_t *st, const char* txt, int num)
 {
     mimas_state_t res;
     if(st == NULL ) res= mimas_get_state();
     else res = *st;
-    printf("MIMAS status: clk_rdy %u, sys_err = %u, sys_idle = %u\n",  res.clk_rdy, res.sys_err, res.sys_idle);
+    printf("MIMAS status(%s,%d): clk_rdy %u, sys_err = %u, sys_idle = %u\n",  txt, num, res.clk_rdy, res.sys_err, res.sys_idle);
 }
 
 int initMimas(void)
@@ -995,7 +1014,7 @@ int initMimas(void)
     {
         mimas_state_t mst = mimas_get_state();
         //uint32_t pads=bcm2835_gpio_pad(BCM2835_PADS_GPIO_0_27);
-        mimas_prn_state(&mst);
+        mimas_prn_state(&mst, __FUNCTION__, __LINE__);
         if((mst.clk_rdy==1) && (mst.sys_err == 0) && (mst.sys_idle == 1))return(0);
         if(retry & 1)mimas_reset();
         bcm2835_delayMicroseconds(10000ull);
@@ -1408,7 +1427,7 @@ void prnDev(int idx)
                     for(i=0;i< devList.devs[idx].sub_dev_cnt;i++)
                     {
                         ws_pix_vdev_t* pxd = devList.devs[idx].pix_devs[i];
-                        printf("subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
+                        printf("\t|-> subDev %d, startAddr %u, endAddr %u, pixCount %u, pixPerUni %u, devId %u\n",  \
                         i,pxd->com.start_address, pxd->com.end_address, pxd->pixel_count, pxd->pix_per_uni, pxd->out_start_id);
 
                     }

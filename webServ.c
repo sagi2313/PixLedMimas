@@ -177,6 +177,7 @@ int buildIndexPg(char* outf)
     len+=sprintf(&outf[len],"<br /><input type=submit value=SEND />\n%s\n</form></body></html>", selectScript);
     outf[len]='\0';
 
+    printf("Index Page:\n\n%s\n\n", outf);
     return(len);
 }
 

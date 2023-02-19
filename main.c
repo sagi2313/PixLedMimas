@@ -48,7 +48,7 @@ post_box_t*         pkt_pb = NULL;
 app_node_t          prods[2];
 app_node_t*         anetp=&prods[0];
 
-
+sqlite3*            sqhan = NULL;
 
 struct timespec timers[3];
 struct timespec tmp;
@@ -63,6 +63,7 @@ void make_a_dev(void)
     int res, i;
     pwm_cfg_t cfg;
     pwm_vdev_t pdev;
+
     cfg.com.start_address = 57;
     cfg.com.start_offset = 0;
     cfg.ch_count = 2;
@@ -76,6 +77,7 @@ void make_a_dev(void)
 
     }
     res = build_dev_pwm(&pdev, &cfg);
+
     cfg.com.start_address = 57;
     cfg.com.start_offset = 0;
     cfg.ch_count = 1;
@@ -92,8 +94,7 @@ void make_a_dev(void)
     vd.pix_per_uni = 150;
     vd.col_map = grb_map_e;
     vd.com.start_address = 17;
-    res =build_dev_ws(&vd);
-
+    res = build_dev_ws(&vd);
 
 /*
     memset((void*)&vd, 0, sizeof(ws_pix_vdev_t));
@@ -1027,7 +1028,7 @@ void* producer(void* dat)
     mimas_state_t       mSt;
     int                 addr_len, ret;
     pid_t               pid;
-    int                 batch;
+    int                 batch = 0;
     sm_state_e          sm_state_cache;
     fl_t                nodes;
     fl_t                cn;
@@ -1130,7 +1131,7 @@ void* producer(void* dat)
         time(&trm.ts2);
         prnDbg(log_prod,"Received %d/%d Pkts fromSock\n",msgcnt,msg_need);
 
-        if((artn->artnode->all % 1000000) == 0)
+        if(artn->artnode->all == 1000000)
         {
             artn->artnode->all=0;
             artn->artnode->miss=0;
@@ -1218,6 +1219,7 @@ int main(void)
 {
     int res;
     sys_init();
+
     prnFinf(log_any,"PixLed Starting (tid:%d)...\n", gettid);
    // setLogLevel(log_pix,log_dbg);
     initMessaging();

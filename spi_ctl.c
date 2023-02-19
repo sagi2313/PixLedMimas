@@ -34,6 +34,8 @@
 #include <byteswap.h>
 #include <pthread.h>
 #include <stdatomic.h>
+
+//#define MIMAS_TIME_STAT
 static int fd = -1;
 int bits=8;
 
@@ -116,14 +118,14 @@ inline static int spi_lock(void)
         do
         {
             usleep((useconds_t)2);
-            if((c  &  (BIT32(128u) -1u)) == (BIT32(128u) -1u) )mimas_prn_state(&mSt); // printf every 128 checks
+            if((c  &  (BIT32(128u) -1u)) == (BIT32(128u) -1u) )mimas_prn_state(&mSt, __FUNCTION__, __LINE__); // printf every 128 checks
             mSt = mimas_get_state();
             //mimas_prn_state(&mSt);
         }while(( mSt.sys_idle == 0) && (++c<250000));
         if(loops++ > 100)
         {
             prnErr(log_mim,"Mimas stuck badly!\n");
-            mimas_prn_state(&mSt);
+            mimas_prn_state(&mSt, __FUNCTION__, __LINE__);
             time(&now);
             tsepo = *localtime(&now);
             strftime(tsbuf, sizeof(tsbuf), "%T", &tsepo);
@@ -131,7 +133,7 @@ inline static int spi_lock(void)
             prnErr(log_mim,"WARNING(%s): mimas reset in line:%d at %s, state after reset:\n", __FUNCTION__,__LINE__, tsbuf);
             usleep((useconds_t)1500);
             mSt = mimas_get_state();
-            mimas_prn_state(&mSt);
+            mimas_prn_state(&mSt, __FUNCTION__, __LINE__);
             rc = pthread_spin_unlock(&spilock);
             if(rc)
             {
@@ -437,13 +439,13 @@ int mimas_start_stream(uint16_t start_bm, uint16_t proto_bm)
 int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
 {
     if(fd == -1)return(-1);
+    if(start_bm == 0 ) return(-3);
 #ifdef MIMAS_TIME_STAT
     struct timespec ts[2];
     clock_gettime(CLOCK_REALTIME, &ts[0]);
 #endif
     int i, ret;
 
-    if(start_bm == 0 ) return(-3);
     start_bm &= MIMAS_STREAM_BM;
     proto_bm &= MIMAS_PROTO_BM;
     mimas_state_t mst;
@@ -495,9 +497,9 @@ int mimas_refresh_start_stream(uint16_t start_bm, uint32_t proto_bm)
             return(-2);
         }
     }
-    start_stream_header[1]= temp_bm  & 0xFF; // use the  value that probably wont crash mimas
-    start_stream_header[2]= ((temp_bm >> 8) & 0x0F);
-    start_stream_header[3]= (proto_bm & 0xFF);
+    start_stream_header[1] = temp_bm  & 0xFF; // use the  value that probably wont crash mimas
+    start_stream_header[2] = ((temp_bm >> 8) & 0x0F);
+    start_stream_header[3] = (proto_bm & 0xFF);
     start_stream_header[4] = (proto_bm>>8) & 0xFF;
     start_stream_header[5] = (proto_bm>>16) & 0xFF;
     ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr[12]);

@@ -20,7 +20,7 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include <sys/syscall.h>
-
+#include <sqlite3.h>
 #include "type_defs.h"
 #include "mimas_cfg.h"
 #include "protocolCommon.h"
@@ -208,7 +208,7 @@ void mimas_test(out_def_t* outs, int byteCnt, uint16_t bm);
 
 void mimas_all_black(out_def_t*);
 mimas_state_t mimas_get_state(void);
-void mimas_prn_state(mimas_state_t*);
+void mimas_prn_state(mimas_state_t*, const char*, int);
 void mimas_reset(void);
 //int initMimas(void);
 
@@ -238,4 +238,5 @@ int sys_init(void);
 void prnDev(int idx);
 void setHandler(void (*handler)(int,siginfo_t *,void *));
 void print_trace(void);
+extern sqlite3*            sqhan;
 #endif // UTILS_H_INCLUDED
