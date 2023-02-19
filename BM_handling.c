@@ -1,4 +1,5 @@
 #include "bm_handling.h"
+#include "utils.h"
 
 void clearBM(bm_t* bm)
 {
@@ -18,7 +19,7 @@ bm_t* createBm(uint32_t elements)
     bm->elements = elements;
     clearBM(bm);
   }
-  printf("Created BM %u bytes in size, blockSize = %llu\n",siz,blockSize);
+  prnFinf(log_any,"Created BM %u bytes in size, blockSize = %llu\n",siz,blockSize);
   return(bm);
 }
 

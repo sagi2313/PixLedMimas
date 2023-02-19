@@ -1046,7 +1046,7 @@ int socketStart(node_t* n, uint16_t portno)
     int rc;
     node_interfaces_t* ifs = &n->ifs;
     n->sockfd = socket_init(NULL);
-    if(n->sockfd<0)return(-1);
+    if(n->sockfd < 0)return(-1);
     if(0 == getifs(n->sockfd, ifs))
     {
         rc = sock_bind(n->sockfd, ifs->ifs[ifs->curr_if_idx].if_name, NULL/*&ifs->ifs[ifs->curr_if_idx].sockaddr.sin_addr.s_addr*/, portno);

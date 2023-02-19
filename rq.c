@@ -45,7 +45,7 @@ post_box_t* createPB_LL(uint32_t count, const char* name, uint8_t* pool, uint32_
     pb->ll.pile.maxCount = count;
     pb->ll.pile.low_mark = count;
     fl_t n = pb->ll.pile.head;
-    for(i=0;i<count-1;i++)
+    for(i = 0;i < (count - 1) ;i++)
     {
         n->item.pl.itemId = i;
         n->item.pl.msg = &pool[i * item_size];
@@ -82,7 +82,7 @@ peer_pack_t* rezerveMsg( rq_head_t* hd)
 {
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count > hd->Q_MSK)return(NULL);
-    return (  &hd->genQ[ hd->slot_sz * ((hd->head +1) &  hd->Q_MSK) ] );
+    return ( ((peer_pack_t*)&hd->genQ[ hd->slot_sz * ((hd->head +1) &  hd->Q_MSK) ] ));
 }
 
 /*  get a pointer to next unread msg */
@@ -91,7 +91,7 @@ peer_pack_t* getMsg(rq_head_t* hd)
     register uint32_t count = __atomic_load_n(&hd->count,  __ATOMIC_RELAXED);
     if(count <1)return(NULL);
 
-    return (&hd->genQ[ ( hd->slot_sz * hd->tail )]);
+    return (((peer_pack_t*)&hd->genQ[ ( hd->slot_sz * hd->tail )]));
 }
 
 /* mark a msg are "read" and move tail index , decrease count */

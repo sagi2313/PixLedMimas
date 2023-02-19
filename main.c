@@ -47,7 +47,7 @@ post_box_t*         pkt_pb = NULL;
 
 app_node_t          prods[2];
 app_node_t*         anetp=&prods[0];
-
+app_node_t*         sacnp=&prods[1];
 sqlite3*            sqhan = NULL;
 
 struct timespec timers[3];
@@ -393,7 +393,7 @@ void  consumeList(peer_pack_t* pkt)
                         }
                         default:
                         {
-                            prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx);
+                            prnErr(log_con,"Unknown Devtype for addr %u devIdx %u\n", raw_addr.addr, devIdx[i]);
                             break;
                         }
                     } // end of switch devType

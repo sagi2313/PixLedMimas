@@ -12,7 +12,7 @@
 static node_t *Node=NULL;
 static gen_addres_u *sAdr, *eAdr;
 
-void art_set_node(const node_t* N)
+void art_set_node(node_t* N)
 {
     Node = N;
     if(N!=NULL)
@@ -38,8 +38,8 @@ art_resp_e ArtNetDecode(const art_net_pack_t* p)
 		{
 			case OpDmx:
 			{
-				art_dmx_data_t *d;
-				d = &(p->ArtDmxOut);
+				//art_dmx_data_t *d;
+				//d = &(p->ArtDmxOut);
 				/*if(d->a_net.net!=sAdr->anet.net)
 				{
 					printf("artnet: Net %u out of bounds\n", d->a_net.net);
@@ -67,111 +67,21 @@ art_resp_e ArtNetDecode(const art_net_pack_t* p)
 			}
 			default:
 			{
-				printf("artnet: Unknown OpCod %u (0x%X)\n",(uint32_t)OpCod,(uint32_t)OpCod);
+				prnErr(log_art, "artnet: Unknown OpCod %u (0x%X)\n",(uint32_t)OpCod,(uint32_t)OpCod);
 				return(art_error_e);
 			}
 		}
 	}
-	printf("artnet: ArtID err 0x08lX\n", *(uint64_t*)&p->head.id[0]);
+	prnErr(log_art, "artnet: ArtID err 0x%llX\n", *(uint64_t*)&p->head.id[0]);
 	return(ignore_error_e);
 }
 
 static uint8_t art[sizeof(art_net_pack_t)];
 
-
-
-
-void make_artnet_resp_old(peer_pack_t* peep)
-{
-	int i,k,j,cnt;
-	uint8_t     max_uni;
-	uint8_t     bindIdCount;
-	gen_addres_u abs_addr;
-	art_net_pack_t *p=(art_net_pack_t*)&art[0];
-	art_net_poll_rep_t *pr = &p->PollRep;
-	sock_data_msg_t *pp = (sock_data_msg_t *)peep;
-	//peerp->sockt = Node->ArtSock;
-	memset(art,0,sizeof(art));
-	p->head.OpCode.OpCode = OpPollReply;
-	*(uint64_t*)(&p->head.id[0]) = ARTNET_ID_RAW;
-	//strcat(p->head.id,"Art-Net\0");
-
-	memcpy(&pr->myIp, &Node->ifs.ifs[Node->ifs.curr_if_idx].sockaddr.sin_addr , sizeof(ip4_addr_t));
-	memcpy(&pr->my_mac, &Node->ifs.ifs[Node->ifs.curr_if_idx].mac , 8);
-	memcpy(&pr->bindIP, &pr->myIp, sizeof(ip4_addr_t));
-
-    strcpy(&pr->ShortName[0] ,Node->nodeName);
-	strcpy(&pr->LongName[0], Node->longName);
-	strcpy(&pr->NodeReport[0],"#0001 [0000]");
-
-	pr->port = ARTNET_PORT;
-	pr->status1.bitf.port_programming = 1;
-	pr->status2.bitf.addressing15bit = 1;
-	pr->EstaManCode.Ushort = ESTA_CODE;
-
-	pr->myVersInfo = NODE_VERSION;
-    abs_addr.addr = devList.min_addr;
-
-	pr->netSwitch = abs_addr.anet.net;//sAdr->anet.net;
-	pr->subSwitch = abs_addr.anet.SubUni.subnet;//sAdr->anet.SubUni.subnet;
-	pr->bindIdx = 1;
-	cnt = 0;
-	k=0;
-	bindIdCount = 0;
-//	max_uni = Node->universe_count;
-	while(k<MAX_UNIS)
-	{
-		memset(&pr->port_types[0],0,sizeof(prt_type_s));
-		for(i=0; ((i<4) && (bindIdCount < 16) ); k++)
-		{
-			*(uint8_t*)(&pr->goodIn[i])=0;
-			pr->goodIn[i].inp_disabled=1;
-			*(uint8_t*)(&pr->goodOut[i])=0;
-			pr->goodOut[i].data_txed=1;
-
-			pr->port_types[i].output=1;
-			pr->port_types[i].prtType = prtDMX512;
-			pr->swOut[i]= abs_addr.addr & 0xF;//((sAdr->anet.SubUni.universe + k)& 0xF);// swout++;
-            bindIdCount++;
-			printf("Fill (%d) k: %02d subSw: %d swout: %02d\n",i,k,pr->subSwitch,pr->swOut[i] );
-			abs_addr.addr++;
-			if(pr->swOut[i++] == 15)
-			{
-				k++;
-				break;
-			}
-		}
-        pr->NumPorts.Uchr[1] = i;
-        printf("SubSw %d sending with %d SubOuts\n",pr->subSwitch, i);
-		j = sendto(Node->sockfd,art,sizeof(art_net_pack_t),0,(const struct sockaddr*)&pp->sender, sizeof(struct sockaddr_in));
-		cnt++;
-		if( bindIdCount == 0x10)
-		{
-            pr->bindIdx++;
-            bindIdCount = 0;
-        }
-		if(j == sizeof(art_net_pack_t))
-		{
-			printf("Artnet Poll Resp(%u) ok\n", cnt);
-		}
-		else
-		{
-			printf("Artnet Poll Resp to %s:error(%u,%d)\n", inet_ntoa(pp->sender.sin_addr),cnt, j);
-			show_socket_error_reason(Node->sockfd);
-		}
-		usleep(10000);
-		////if(pr->swOut[i] == 15)				pr->subSwitch ++;
-		pr->subSwitch = (abs_addr.addr >> 4);
-		////pr->subSwitch = Node->app_cfg.art_start_uni.SubUni.subnet + (k/16);
-	}
-}
-
-
 void make_artnet_resp(sock_data_msg_t* peep)
 {
     const char* devNames[]={"unused","pixel","dmx512","undef", "pwm"};
 	int i,k,j,cnt;
-	uint8_t     max_uni;
 	uint8_t     bindIdCount;
 	gen_addres_u abs_addr;
 	art_net_pack_t *p=(art_net_pack_t*)&art[0];

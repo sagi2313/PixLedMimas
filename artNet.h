@@ -38,16 +38,19 @@
 #define	prtArtNet	(uint8_t)5
 #define prtInput	(uint8_t)64
 #define prtOutput	(uint8_t)128
+
+
 #pragma pack(1)
 
-typedef union __attribute__((packed))
+typedef union
 {
 	char   		Schr[2];
 	uint8_t 	Uchr[2];
 	uint16_t 	Ushort;
 	int16_t		Sshort;
 }union16_t ;
-typedef enum  __attribute__((packed))
+
+typedef enum
 {
 	OpPoll		=	0x2000,
 	OpPollReply	=	0x2100,
@@ -69,24 +72,24 @@ typedef enum  __attribute__((packed))
 	OpOther
 }art_net_opcodes_e;
 
-typedef union __attribute__((packed))
+typedef union
 {
 	uint16_t/*art_net_opcodes_e*/ OpCode;
-	struct __attribute__((packed))
+	struct
 	{
 		uint8_t HiCode;
 		uint8_t LoCode;
-	}b __attribute__((packed));
+	}b ;
 }art_net_opcodes_u;
 
-typedef struct  __attribute__((packed))
+typedef struct
 {
 	uint8_t	dc1:1;	//don't care
 	uint8_t	send_poll_reply:1;
 	uint8_t	diag_enabled:1;
 	uint8_t	diag_type:1;
 	uint8_t	vlc_enable:1;
-}TalkToMe_s __attribute__((packed));
+}TalkToMe_s;
 
 typedef union
 {
@@ -105,7 +108,7 @@ typedef union
 		uint8_t	dc:1;
 		uint8_t	port_programming:2;
 		uint8_t	indicator_state:2;
-	}bitf __attribute__((packed));
+	}bitf;
 }node_status1_u;
 
 typedef union
@@ -117,15 +120,15 @@ typedef union
 		uint8_t	ip_auto:1;
 		uint8_t	dhcp:1;
 		uint8_t	addressing15bit:1;
-	}bitf __attribute__((packed));
-}node_status2_u __attribute__((packed));
+	}bitf;
+}node_status2_u;
 
 typedef struct
 {
 		uint8_t	  prtType:6;
 		uint8_t	  input:1;
 		uint8_t	  output:1;
-}prt_type_s __attribute__((packed));
+}prt_type_s;
 
 typedef struct
 {
@@ -136,7 +139,7 @@ typedef struct
 	uint8_t dmx512_sips:1;
 	uint8_t dmx512_tst:1;
 	uint8_t data_rxed:1;
-}good_in_s __attribute__((packed));
+}good_in_s;
 
 typedef struct
 {
@@ -148,7 +151,7 @@ typedef struct
 	uint8_t dmx512_sips:1;
 	uint8_t dmx512_tst:1;
 	uint8_t data_txed:1;
-}good_out_s __attribute__((packed));
+}good_out_s;
 
 typedef union {
 addressing_t raw_addr;
@@ -160,12 +163,12 @@ struct
 		{
 			uint8_t  universe:4;
 			uint8_t  subnet:4;
-		}__attribute__((packed));
+		};
 		uint8_t subuni_full;
-	}SubUni __attribute__((packed));
+	}SubUni;
 	uint8_t	net:7;
 	};
-}art_net_net_t __attribute__((packed));
+}art_net_net_t;
 
 
 typedef struct
@@ -215,7 +218,7 @@ typedef struct
 	uint8_t			bindIdx;
 	node_status2_u	status2;
 	uint8_t			filler[26];
-}art_net_poll_rep_t __attribute__((packed));
+}art_net_poll_rep_t;
 
 
 typedef struct
@@ -251,7 +254,7 @@ typedef struct
 #pragma pack()
 #include "type_defs.h"
 
-void art_set_node(const node_t* N);
+void art_set_node(node_t* N);
 #ifdef PEER_PACK_T
 void make_artnet_resp(peer_pack_t* pp);
 

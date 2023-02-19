@@ -1,15 +1,16 @@
 #include "gen_lists.h"
-
+#include <stdlib.h>
 
 ln_t addItem(ln_t *head, void* item)
 {
     if(head == NULL)return(NULL);
+    if(item == NULL)return(NULL);
     ln_t n;
     if(*head == NULL)
     {
         *head  =  (ln_t)calloc(1, sizeof(lnode_t));
         (*head)->data = item;
-        return(n);
+        return(*head);
     }
     else
     {

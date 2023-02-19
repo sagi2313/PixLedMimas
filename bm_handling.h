@@ -2,6 +2,7 @@
 #define BM_HANDLING_H_INCLUDED
 #include <stdint-gcc.h>
 #include <stdlib.h>
+#include <string.h>
 typedef uint64_t blkTyp;
 
 typedef enum

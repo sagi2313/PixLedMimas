@@ -1,7 +1,7 @@
 #ifndef TYPE_DEFS_H_INCLUDED
 #define TYPE_DEFS_H_INCLUDED
 
-
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdint-gcc.h>
 #include <sys/types.h>
@@ -29,6 +29,7 @@
 #include <stdint-gcc.h>
 #include <stdint.h>
 #include "sys_defs.h"
+#include <string.h>
 #include "mimas_cfg.h"
 //#include "protocolCommon.h"
 
@@ -449,6 +450,5 @@ typedef struct
     node_t*          artnode;
     postbox          artPB;
 }app_node_t;
-
 
 #endif // TYPE_DEFS_H_INCLUDED

@@ -84,6 +84,8 @@ typedef enum
     log_dmx,
     log_ll,
     log_mim,
+    log_art,
+    log_sacn,
     log_src_max
 }log_src_e;
 
